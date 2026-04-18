@@ -1,68 +1,121 @@
-I have already generated these classes for the knockout authoring pipeline:
-- KnockoutSheetMetadata
-- KnockoutPolicySheetRow
-- KnockoutSheetMetadataExtractor
-- KnockoutPolicySheetExtractor
-- KnockoutFieldDictionary
-- KnockoutRowNormalizer
-- CanonicalKnockoutRule
-- CanonicalCondition
-- CanonicalClause
-- CanonicalAction
-- KnockoutPromptBuilder
-- TachyonKnockoutTranslationService
-- TachyonKnockoutTranslationServiceImpl
+package com.wellsfargo.creditdecision.authoring.excel.extractor;
 
-Now fix and extend the implementation with these exact requirements:
+import com.wellsfargo.creditdecision.authoring.excel.model.KnockoutPolicySheetRow;
+import com.wellsfargo.creditdecision.authoring.excel.model.KnockoutSheetMetadata;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.junit.jupiter.api.Test;
 
-1. In TachyonKnockoutTranslationServiceImpl, change output path from:
-   application.policies
-   to:
-   application.decisionDetails.policies
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.Optional;
 
-2. Ensure every canonical knockout rule explicitly sets:
-   - stage = "KNOCKOUT"
-   - artifactType = "POLICY_RULE"
-   - scope = "APPLICANT"
-   - applicantFilter = "primaryInd = 1"
+import static org.junit.jupiter.api.Assertions.*;
 
-3. Fix D22 mocked logic so it matches workbook semantics:
-   frozenFileInd = false
-   AND lockedFileOrWithheldIndicator = false
-   AND (
-       (all0300 != null AND (all0300 == 0 OR all0300 == 99))
-       OR noTradeInd = true
-       OR noHitInd = true
-       OR minorIndicator = true
-   )
+public class KnockoutPolicyImportSmokeTest {
 
-   For MVP, it is acceptable to represent the OR block as a RAW_EXPR clause if nested condition support is not implemented yet.
+    // Update this path if your workbook is somewhere else.
+    private static final String WORKBOOK_PATH =
+            "src/test/resources/DHW_POS_WF_CreditApply_WIPX1.xlsx";
 
-4. Preserve D22 note text:
-   "Knockout runs before imputations; use raw all0300 and check for 0/99, not imputed -99."
+    private static final String SHEET_NAME = "Knockout Calcs & Policy";
 
-5. Keep Q18 logic as:
-   frozenFileInd = true OR lockedFileOrWithheldIndicator = true
+    @Test
+    void shouldExtractKnockoutMetadataAndPolicyRows() throws Exception {
+        Path workbookPath = Paths.get(WORKBOOK_PATH);
+        assertTrue(Files.exists(workbookPath),
+                "Workbook not found at: " + workbookPath.toAbsolutePath());
 
-6. Add a smoke test class at:
-   src/test/java/com/wellsfargo/creditdecision/authoring/excel/KnockoutPolicyImportSmokeTest.java
+        try (InputStream inputStream = Files.newInputStream(workbookPath);
+             Workbook workbook = WorkbookFactory.create(inputStream)) {
 
-7. That test should:
-   - open the Excel workbook using Apache POI from a configurable local file path
-   - read sheet "Knockout Calcs & Policy"
-   - run KnockoutSheetMetadataExtractor
-   - run KnockoutPolicySheetExtractor
-   - print extracted metadata
-   - print all extracted rows
-   - translate only policy codes Q18 and D22 using TachyonKnockoutTranslationServiceImpl
-   - serialize canonical rules using Jackson ObjectMapper pretty print
-   - assert that at least 2 policy rows were extracted
-   - assert that Q18 and D22 were found
+            Sheet sheet = workbook.getSheet(SHEET_NAME);
+            assertNotNull(sheet, "Sheet not found: " + SHEET_NAME);
 
-8. Add any helper methods needed for safe cell reading and pretty output.
+            KnockoutSheetMetadataExtractor metadataExtractor = new KnockoutSheetMetadataExtractor();
+            KnockoutPolicySheetExtractor policyExtractor = new KnockoutPolicySheetExtractor();
 
-9. Do not use Lombok.
+            KnockoutSheetMetadata metadata = metadataExtractor.extract(sheet);
+            List<KnockoutPolicySheetRow> rows = policyExtractor.extractPolicyRows(sheet);
 
-10. Keep code compilable with Gradle and JUnit 5.
+            assertNotNull(metadata, "Metadata must not be null");
+            assertNotNull(rows, "Rows list must not be null");
+            assertFalse(rows.isEmpty(), "Expected knockout policy rows but extractor returned none");
 
-Generate only the changed files and the new test file.
+            printMetadata(metadata);
+            printRows(rows);
+
+            Optional<KnockoutPolicySheetRow> q18 = rows.stream()
+                    .filter(row -> "Q18".equalsIgnoreCase(safe(row.getPolicyCode())))
+                    .findFirst();
+
+            Optional<KnockoutPolicySheetRow> d22 = rows.stream()
+                    .filter(row -> "D22".equalsIgnoreCase(safe(row.getPolicyCode())))
+                    .findFirst();
+
+            assertTrue(q18.isPresent(), "Q18 row was not extracted");
+            assertTrue(d22.isPresent(), "D22 row was not extracted");
+
+            // Q18 assertions
+            assertEquals("KNOCKOUT", safe(q18.get().getPolicyCategory()).toUpperCase(),
+                    "Q18 policy category should be KNOCKOUT");
+            assertFalse(q18.get().getInputParameters().isEmpty(),
+                    "Q18 input parameters should not be empty");
+            assertFalse(isBlank(q18.get().getFormulaExpression()),
+                    "Q18 formula expression should not be blank");
+
+            // D22 assertions
+            assertEquals("KNOCKOUT", safe(d22.get().getPolicyCategory()).toUpperCase(),
+                    "D22 policy category should be KNOCKOUT");
+            assertFalse(d22.get().getInputParameters().isEmpty(),
+                    "D22 input parameters should not be empty");
+            assertFalse(isBlank(d22.get().getFormulaExpression()),
+                    "D22 formula expression should not be blank");
+        }
+    }
+
+    private void printMetadata(KnockoutSheetMetadata metadata) {
+        System.out.println("===== KNOCKOUT METADATA =====");
+        System.out.println("sheetName=" + safe(metadata.getSheetName()));
+        System.out.println("outputPath=" + safe(metadata.getOutputPath()));
+        System.out.println("primaryApplicantOnly=" + metadata.getPrimaryApplicantOnly());
+        System.out.println("stopProcessingIfAnyPolicyTriggered=" + metadata.getStopProcessingIfAnyPolicyTriggered());
+        System.out.println("rawInstructions=");
+        System.out.println(safe(metadata.getRawInstructions()));
+        System.out.println("================================");
+    }
+
+    private void printRows(List<KnockoutPolicySheetRow> rows) {
+        System.out.println("===== EXTRACTED KNOCKOUT ROWS =====");
+        for (KnockoutPolicySheetRow row : rows) {
+            printRow(row);
+        }
+        System.out.println("===================================");
+    }
+
+    private void printRow(KnockoutPolicySheetRow row) {
+        System.out.println("rowNum=" + row.getRowNumber());
+        System.out.println("ruleId=" + safe(row.getRuleId()));
+        System.out.println("ruleName=" + safe(row.getRuleName()));
+        System.out.println("policyOrCalculation=" + safe(row.getPolicyOrCalculation()));
+        System.out.println("inputParameters=" + row.getInputParameters());
+        System.out.println("formulaExpression=" + safe(row.getFormulaExpression()));
+        System.out.println("policyCode=" + safe(row.getPolicyCode()));
+        System.out.println("policyCategory=" + safe(row.getPolicyCategory()));
+        System.out.println("locationInBom=" + safe(row.getLocationInBom()));
+        System.out.println("notes=" + safe(row.getNotes()));
+        System.out.println("----------------------------------");
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+}
