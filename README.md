@@ -1,34 +1,34 @@
- Do not modify code yet. I want a current-state execution audit of the existing pipeline exactly as implemented today.
+ Continue from the existing codebase and implement the Initialize & Impute sheet incrementally without rewriting what is already generated.
 
-Explain the current end-to-end flow class-by-class and stage-by-stage, including:
-1. request mapping from DecisionRequest into domain objects,
-2. current fixed stage order and gating behavior,
-3. what Global Calcs does today and what outputs it writes,
-4. how Knockout is authored, normalized, sent to Tachyon, persisted, and executed in Drools,
-5. how Error Scenarios is authored, normalized, persisted, and executed,
-6. how Initialize/Impute is authored, normalized, persisted, and executed,
-7. what facts each Drools stage inserts at runtime,
-8. what helper/action classes each DRL stage uses,
-9. where each stage writes outputs in Application / DecisionContext / BOM paths,
-10. which rules/rows are executable vs metadata-only,
-11. what is validated vs what is still assumed,
-12. what parts are proven by tests versus not yet business-validated.
+Implement this stage using the same authoring-to-execution pattern already used for Knockout and Error Scenarios:
+1. extract and parse the Initialize & Impute sheet into raw row models,
+2. normalize rows into strict imputation / derived-attribute rule definitions,
+3. validate source and target paths using the shared field catalog,
+4. build a structured Tachyon request from normalized Initialize/Impute definitions,
+5. generate DRL for deterministic BTS / imputed attribute assignment behavior,
+6. validate and persist the generated DRL artifact and metadata,
+7. execute the persisted/generated DRL through Drools at runtime,
+8. write derived BTS / imputed attributes into a stable domain/context location for later stages to consume.
 
-For each stage, clearly show:
-- input data read,
-- normalized model produced,
-- Tachyon request payload shape used,
-- DRL artifact generated/loaded,
-- Drools facts inserted,
-- outputs written,
-- trace/gating behavior.
-  Now inspect the existing runtime execution for each authored Drools stage and confirm whether rules are actually being executed, not just generated and persisted.
+Important modeling rules:
+- treat derived attribute names like BTS.all0000 as output targets
+- treat input parameters like all0000 as validated source field paths
+- treat formula/expression text as authoring syntax that must be normalized into explicit scope / filter / condition / transformation / action structures before Tachyon generates DRL
+- do not execute raw sheet formula text directly at runtime
+- preserve traceability to sheet row / rule id
+- use stable helper/action methods for assigning derived values rather than embedding too much Java logic directly in DRL
 
-For Knockout, Error Scenarios, and Initialize/Impute, explain:
-- where the runtime DRL artifact is loaded from,
-- how the KieBase/session is created or reused,
-- which facts are inserted,
-- which helper/action objects are inserted,
-- how rule firing is triggered,
-- how outputs are written back,
-- how we know from current tests that rules fired successfully.
+Support repeated patterns seen in the sheet such as:
+- for each applicant where applicant[i].primaryInd = 1
+- if input is null or unavailable then assign -1
+- else if input > threshold then assign transformed negative value
+- else assign original value
+
+Implementation requirements:
+- keep extraction, normalization, Tachyon request construction, DRL validation, artifact persistence, runtime Drools evaluation, and stage integration as separate concerns
+- preserve existing Global Calcs, Knockout, and Error Scenarios behavior
+- integrate Initialize & Impute into the current fixed engine in the intended stage order
+- extend the domain/BOM model and shared field catalog as needed for BTS / derived attributes so later stages like Risk Tier Tables and Policy Tables can consume them cleanly
+- add focused tests for extraction, normalization, representative imputation rows, DRL generation, runtime assignment behavior, and stage integration
+- at the end, clearly list files added/updated, assumptions made, and any ambiguous rows interpreted heuristically
+- For this stage, generate DRL that performs derived attribute assignment through a stable InitializeImputeActions / BtsAttributeActions helper API, not CreateError and not knockout decision actions.
