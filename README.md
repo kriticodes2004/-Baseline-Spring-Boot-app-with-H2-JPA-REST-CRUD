@@ -1,22 +1,26 @@
- Continue from the existing codebase and implement the Initialize & Impute sheet incrementally without rewriting what is already generated.
+ Continue from the existing codebase and revert the Initialize & Impute stage away from Tachyon/DRL authoring. Do not rewrite unrelated completed stages.
 
-Implement this stage using the same authoring-to-execution pattern already used for Knockout and Error Scenarios:
-1. extract and parse the Initialize & Impute sheet into raw row models,
-2. normalize rows into strict imputation / derived-attribute rule definitions,
-3. validate source and target paths using the shared field catalog,
-4. build a structured Tachyon request from normalized Initialize/Impute definitions,
-5. generate DRL for deterministic BTS / imputed attribute assignment behavior,
-6. validate and persist the generated DRL artifact and metadata,
-7. execute the persisted/generated DRL through Drools at runtime,
-8. write derived BTS / imputed attributes into a stable domain/context location for later stages to consume.
+Implement the Initialize & Impute sheet as a deterministic Java stage, not as a Tachyon generation pipeline.
 
-Important modeling rules:
+Required changes:
+1. remove or stop using any Initialize & Impute Tachyon request builder / DRL generation / DRL persistence / Drools runtime pieces that were introduced for this stage,
+2. keep Knockout and Error Scenarios unchanged in their current authoring-to-execution pattern,
+3. re-implement Initialize & Impute as:
+   - sheet extraction/parsing,
+   - row normalization into strict Java models,
+   - deterministic Java evaluation/execution,
+   - writing BTS / imputed / derived attributes into a stable domain/context location,
+   - fixed-stage engine integration,
+   - focused unit tests.
+
+Modeling rules:
 - treat derived attribute names like BTS.all0000 as output targets
 - treat input parameters like all0000 as validated source field paths
-- treat formula/expression text as authoring syntax that must be normalized into explicit scope / filter / condition / transformation / action structures before Tachyon generates DRL
-- do not execute raw sheet formula text directly at runtime
-- preserve traceability to sheet row / rule id
-- use stable helper/action methods for assigning derived values rather than embedding too much Java logic directly in DRL
+- treat formula/expression text as authoring syntax that must be normalized into explicit Java-executable structures
+- do not execute raw sheet formula text directly
+- do not use Tachyon for this stage
+- do not generate DRL for this stage
+- preserve traceability to row/rule id and raw formula text
 
 Support repeated patterns seen in the sheet such as:
 - for each applicant where applicant[i].primaryInd = 1
@@ -24,11 +28,41 @@ Support repeated patterns seen in the sheet such as:
 - else if input > threshold then assign transformed negative value
 - else assign original value
 
-Implementation requirements:
-- keep extraction, normalization, Tachyon request construction, DRL validation, artifact persistence, runtime Drools evaluation, and stage integration as separate concerns
+Implement clean separation of concerns:
+- InitializeImputeRow
+- InitializeImputeSheetExtractor
+- InitializeImputeDefinition
+- InitializeImputeRowNormalizer
+- InitializeImputeEvaluator
+- InitializeImputeStage
+- helper/writer class for BTS/derived attribute assignment if useful
+
+Validation requirements:
+- validate source and target paths using the shared field catalog
+- preserve compatibility with Application, DecisionContext, and later stages
+- extend the domain/BOM model only as needed for stable BTS/derived-attribute storage
+
+Stage requirements:
+- integrate Initialize & Impute into the intended fixed engine order
 - preserve existing Global Calcs, Knockout, and Error Scenarios behavior
-- integrate Initialize & Impute into the current fixed engine in the intended stage order
-- extend the domain/BOM model and shared field catalog as needed for BTS / derived attributes so later stages like Risk Tier Tables and Policy Tables can consume them cleanly
-- add focused tests for extraction, normalization, representative imputation rows, DRL generation, runtime assignment behavior, and stage integration
-- at the end, clearly list files added/updated, assumptions made, and any ambiguous rows interpreted heuristically
-- For this stage, generate DRL that performs derived attribute assignment through a stable InitializeImputeActions / BtsAttributeActions helper API, not CreateError and not knockout decision actions.
+- do not change the Knockout/Error Scenarios Tachyon + DRL flow
+
+Testing requirements:
+- add focused tests for extraction
+- add normalization tests for representative rows
+- add evaluator tests for:
+  - null/unavailable -> -1
+  - threshold transform
+  - copy-through case
+  - primary-applicant-only filtering
+- add stage integration tests
+- verify full suite still passes
+
+At the end provide:
+- files added
+- files updated
+- files reverted or no longer used for Initialize & Impute
+- assumptions made
+- any ambiguous sheet rows interpreted
+-  heuristically
+- For Initialize & Impute, keep all runtime behavior in Java evaluator/service logic so later debugging and payload-based validation are straightforward.
