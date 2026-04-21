@@ -1,31 +1,62 @@
-Continue from the existing codebase and implement the Application Policy Rules sheet incrementally without rewriting what is already generated.
+We are restarting this project from scratch and need a clean, extensible implementation.
 
-Implement this sheet as a deterministic Java stage, not a Tachyon/DRL authoring pipeline.
+Project problem statement:
+We are building a credit decisioning service driven by an Excel workbook that acts as the business source of truth. The system must be extensible so that when business users edit/add/remove rows in the workbook, the implementation can absorb those changes with minimal code changes, as long as the sheet structure and supported rule grammar remain the same.
 
-Requirements:
-1. parse the Application Policy Rules sheet into structured raw row models capturing ruleId, ruleSet, ruleName, input parameters, formula/expression text, policyCode, BOM location, and special execution-condition/helper rows,
-2. normalize the sheet into strict Java rule definitions with explicit conditions, actions, execution steps, ruleset grouping, and trace metadata,
-3. support expression patterns such as:
-   - direct numeric/string/boolean comparisons
-   - compound AND / OR logic
-   - bounded comparisons like 0 < x < 170
-   - IN / NOT IN style checks where needed
-   - references to intermediate variables and prior stage outputs
-   - execution of referenced tables such as tblT50MinFICO, tblT51Policy, t94Program, t94Policy, etc.
-   - CreatePolicy actions writing to decisionDetails.policies
-4. evaluate rules using applicant/application level data for the primary applicant only where specified by the sheet,
-5. reuse outputs from Risk Tier Tables, Policy Tables, Initialize & Impute, Global Calcs, and prior calculated/intermediate values instead of duplicating their logic,
-6. support execution-condition rows and ruleset activation/switching cleanly,
-7. support helper/calc rows such as ratio or intermediate-variable setup using deterministic Java logic,
-8. preserve row/ruleset order and do not assume global first-hit behavior unless explicitly stated by the sheet,
-9. create structured policy objects in the domain/BOM with policyCode, ruleId, ruleName, ruleSet, source stage, and traceability,
-10. integrate the stage cleanly into the fixed engine without changing existing completed stages,
-11. add focused tests for extraction, normalization, referenced-table usage, representative rules like T50/T51/T94/T98 and bureau-fraud style rows, multi-policy creation behavior, execution-condition handling, and stage integration.
+Core requirements:
+1. Excel workbook is the source of truth for business logic and mappings.
+2. The architecture must support extensibility and traceability.
+3. We need stage-by-stage visibility into what is extracted, normalized, generated, executed, and written.
+4. We also want explainability later, where Tachyon can be invoked to explain why a decision was made using execution traces.
+5. For now, focus on implementing only the first set of stages up to Initialize & Impute.
 
-Implementation constraints:
-- deterministic Java only
-- no Tachyon and no DRL for this sheet
-- keep extraction, normalization, condition parsing, table invocation/reuse, policy creation, and tests separate
-- extend shared context/domain only as needed for intermediate values and policy storage
-- at the end clearly list files added/updated, assumptions made, and ambiguous expressions interpreted heuristically
-- For Application Policy Rules, keep all runtime behavior in Java so rule evaluation, table reuse, intermediate calculations, and policy creation are straightforward to trace and debug during payload-based testing.
+Workbook:
+- The cleaned workbook is present in this project directory.
+- Refer to the workbook from the local directory while implementing.
+- Treat the workbook as the source for sheet structure, mappings, and business rules.
+
+Architecture we are following:
+
+A. Java deterministic stages
+Use Java after extraction/normalization for:
+- Input Data
+- BOM Requirements integration / shared path catalog / BOM mapping metadata
+- Global Calcs
+- Initialize & Impute
+
+B. Tachyon authoring pipeline stages
+Use normalize -> Tachyon -> DRL -> validation -> persistence -> Drools runtime for:
+- Knockout Calcs & Policy
+- business-authored business-error rows in Error Scenarios
+
+C. Java-only technical/system handling
+Keep in Java:
+- system/unexpected exception handling
+- transport/API error mapping
+- retry/non-retry mapping
+- alerts/technical failure handling
+
+Execution order for the first implementation batch:
+1. Request mapping / Input Data
+2. BOM Requirements integration / shared field catalog
+3. Global Calcs
+4. Knockout Calcs & Policy
+5. Error Scenarios
+6. Initialize & Impute
+
+Expected implementation style:
+- do not hardcode row-by-row business rules
+- use sheet extraction + normalization + generic evaluators/pipelines
+- make the design expandable so more rows of the same structure can be added later from Excel without code changes
+- only require code changes if a brand-new grammar/operator/sheet structure appears
+
+Traceability / debug requirement:
+For every stage, we need developer-visible tracing so we can inspect:
+- what sheet rows/tables were extracted
+- what normalized models were produced
+- for Tachyon stages: what request payload was built, what DRL was generated/validated/persisted
+- for Drools stages: what facts were inserted, what rules fired, what outputs were written
+- for Java stages: what inputs were read, what outputs were written
+- whether processing continued, stopped, or was skipped
+
+Please use this context as the foundation for the implementation. Do not start implementing yet in this response; first absorb this architecture and use it consistently for the next prompts.
