@@ -1,40 +1,65 @@
-Now implement only the first 3 parts using the workbook in the current project directory, without rewriting unrelated code:
+Now implement only the next 3 parts using the same workbook and existing architecture, without rewriting the earlier completed parts:
 
-1. Input Data
-2. BOM Requirements integration
-3. Global Calcs
+4. Knockout Calcs & Policy
+5. Error Scenarios
+6. Initialize & Impute
 
 Requirements:
 
-1. Input Data
-- implement as Java after extraction
-- parse the sheet into structured field metadata
-- use it to support request contract, domain mapping, nested structures, and shared path catalog creation/validation
+4. Knockout Calcs & Policy
+- implement using the Tachyon authoring pipeline:
+  extraction -> normalization -> Tachyon request -> DRL generation -> DRL validation -> artifact persistence -> Drools runtime execution
+- execute Knockout Calcs first, then Knockout Policy
+- if any application policy exists after knockout execution, stop processing and mark the application declined
+- use a helper/action function to create policies in decision details / policies
+- support only primary applicant for MVP
+- preserve traceability and gating
 
-2. BOM Requirements
-- implement as Java metadata/config integration only
-- use it to standardize field catalog paths, BOM/output locations, and naming alignment
-- do not treat it as a runtime business-rule stage
+5. Error Scenarios
+- business-authored business-error rows should use the Tachyon authoring pipeline and Drools runtime
+- technical/system/API error mapping should remain Java/config-based and separate
+- support missing data/business error rows from the sheet
+- keep generic system error codes and external retry/non-retry handling deterministic and separate
 
-3. Global Calcs
+6. Initialize & Impute
 - implement as deterministic Java stage after extraction/normalization
-- use workbook rows to build normalized calc definitions and evaluate them in Java
-- keep it expandable for future same-structure rows
+- do not use Tachyon for this sheet
+- support repeated patterns such as:
+  - primary applicant only
+  - null/unavailable -> sentinel/default assignment
+  - threshold transform
+  - copy-through
+  - reason-code appends
+  - score/model extraction
+- write outputs into stable BTS / imputed / decisionDetails locations for later stages
 
-Debug/visibility requirement:
-Add developer-visible tracing/logging or a debug report so I can inspect:
-- extracted rows/definitions
-- normalized models
+Critical debug/visibility requirement:
+For Knockout and Error Scenarios, print/log:
+- normalized rules
+- Tachyon request payload
+- Tachyon response
+- generated DRL
+- DRL validation result
+- artifact persistence details
+- Drools facts inserted
+- rules fired
+- outputs/policies/errors written
+- stop/continue behavior
+
+For Initialize & Impute, print/log:
+- extracted rows
+- normalized definitions
 - inputs read
 - outputs written
-- stage execution result
-- final state summary after these 3 parts
 
-Also add a simple developer-friendly way to run and inspect the current flow.
+For overall execution, print/log:
+- stage execution order
+- stage result summary
+- final state summary
 
 At the end, list:
 - files added
 - files updated
 - assumptions made
 - ambiguous rows interpreted heuristically
-- how to run the debug flow
+- how to run and inspect the debug flow
