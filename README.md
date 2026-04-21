@@ -1,42 +1,31 @@
-Continue from the existing codebase and implement both the Risk Tier Tables sheet and the Policy Tables sheet incrementally without rewriting what is already generated.
+Continue from the existing codebase and implement the Application Policy Rules sheet incrementally without rewriting what is already generated.
 
-Implement both sheets as deterministic Java table-evaluation stages, not Tachyon.
+Implement this sheet as a deterministic Java stage, not a Tachyon/DRL authoring pipeline.
 
-For both sheets:
-1. parse each sheet into one or more named table blocks with metadata, pre-execution actions, declared outputs/BOM locations, input columns, output columns, and ordered data rows,
-2. normalize the extracted tables into strict Java models for table definition, row conditions, output assignments, defaults, and evaluation mode,
-3. support cell condition patterns such as:
-   - N/A as wildcard
-   - exact value match
-   - numeric >= / <= comparisons
-   - numeric ranges / score bands
-   - one-of / not-one-of lists
-   - invalid / missing buckets where present
-4. apply declared pre-execution defaults before row evaluation,
-5. evaluate using primary-applicant data where the sheet says primary applicant only,
-6. enforce FIRST-HIT behavior exactly as stated in the sheets,
-7. write outputs to the exact BOM/domain/context locations,
-8. preserve traceability to sheet name, table name, matched row, matched row/column band where relevant, defaults applied, inputs used, and outputs written,
-9. add focused tests for extraction, normalization, condition parsing, first-hit evaluation, default handling, output writing, and stage integration.
-
-Risk Tier Tables specifics:
-- treat the sheet as matrix/band lookup logic
-- parse row bands and column bands correctly
-- support matrix lookup using the configured applicant-level scores
-- write outputs such as riskTier and related reason-code outputs to the configured BOM locations
-- preserve the exact first qualifying matrix result
-
-Policy Tables specifics:
-- treat the sheet as ordered row-based policy lookup tables
-- parse multiple named table blocks such as min-fico and policy-indicator tables
-- support mixed condition columns and one or more output columns
-- apply pre-exec actions like initializing default outputs before first-hit row evaluation
-- allow intermediate policy-table outputs to be consumed by later tables if needed
+Requirements:
+1. parse the Application Policy Rules sheet into structured raw row models capturing ruleId, ruleSet, ruleName, input parameters, formula/expression text, policyCode, BOM location, and special execution-condition/helper rows,
+2. normalize the sheet into strict Java rule definitions with explicit conditions, actions, execution steps, ruleset grouping, and trace metadata,
+3. support expression patterns such as:
+   - direct numeric/string/boolean comparisons
+   - compound AND / OR logic
+   - bounded comparisons like 0 < x < 170
+   - IN / NOT IN style checks where needed
+   - references to intermediate variables and prior stage outputs
+   - execution of referenced tables such as tblT50MinFICO, tblT51Policy, t94Program, t94Policy, etc.
+   - CreatePolicy actions writing to decisionDetails.policies
+4. evaluate rules using applicant/application level data for the primary applicant only where specified by the sheet,
+5. reuse outputs from Risk Tier Tables, Policy Tables, Initialize & Impute, Global Calcs, and prior calculated/intermediate values instead of duplicating their logic,
+6. support execution-condition rows and ruleset activation/switching cleanly,
+7. support helper/calc rows such as ratio or intermediate-variable setup using deterministic Java logic,
+8. preserve row/ruleset order and do not assume global first-hit behavior unless explicitly stated by the sheet,
+9. create structured policy objects in the domain/BOM with policyCode, ruleId, ruleName, ruleSet, source stage, and traceability,
+10. integrate the stage cleanly into the fixed engine without changing existing completed stages,
+11. add focused tests for extraction, normalization, referenced-table usage, representative rules like T50/T51/T94/T98 and bureau-fraud style rows, multi-policy creation behavior, execution-condition handling, and stage integration.
 
 Implementation constraints:
-- keep extraction, normalization, condition parsing, matrix/table evaluation, BOM writing, and tests separate
-- preserve existing Global Calcs, Knockout, Error Scenarios, and Initialize & Impute behavior
-- do not use Tachyon or DRL for these two sheets
-- keep runtime behavior deterministic and easy to debug
-- extend the shared field catalog and domain/context only as needed for clean output storage and later-stage consumption
-- at the end, clearly list files added/updated, assumptions made, and any ambiguous table cells or ranges interpreted heuristically
+- deterministic Java only
+- no Tachyon and no DRL for this sheet
+- keep extraction, normalization, condition parsing, table invocation/reuse, policy creation, and tests separate
+- extend shared context/domain only as needed for intermediate values and policy storage
+- at the end clearly list files added/updated, assumptions made, and ambiguous expressions interpreted heuristically
+- For Application Policy Rules, keep all runtime behavior in Java so rule evaluation, table reuse, intermediate calculations, and policy creation are straightforward to trace and debug during payload-based testing.
