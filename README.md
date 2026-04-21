@@ -1,68 +1,42 @@
- Continue from the existing codebase and revert the Initialize & Impute stage away from Tachyon/DRL authoring. Do not rewrite unrelated completed stages.
+Continue from the existing codebase and implement both the Risk Tier Tables sheet and the Policy Tables sheet incrementally without rewriting what is already generated.
 
-Implement the Initialize & Impute sheet as a deterministic Java stage, not as a Tachyon generation pipeline.
+Implement both sheets as deterministic Java table-evaluation stages, not Tachyon.
 
-Required changes:
-1. remove or stop using any Initialize & Impute Tachyon request builder / DRL generation / DRL persistence / Drools runtime pieces that were introduced for this stage,
-2. keep Knockout and Error Scenarios unchanged in their current authoring-to-execution pattern,
-3. re-implement Initialize & Impute as:
-   - sheet extraction/parsing,
-   - row normalization into strict Java models,
-   - deterministic Java evaluation/execution,
-   - writing BTS / imputed / derived attributes into a stable domain/context location,
-   - fixed-stage engine integration,
-   - focused unit tests.
+For both sheets:
+1. parse each sheet into one or more named table blocks with metadata, pre-execution actions, declared outputs/BOM locations, input columns, output columns, and ordered data rows,
+2. normalize the extracted tables into strict Java models for table definition, row conditions, output assignments, defaults, and evaluation mode,
+3. support cell condition patterns such as:
+   - N/A as wildcard
+   - exact value match
+   - numeric >= / <= comparisons
+   - numeric ranges / score bands
+   - one-of / not-one-of lists
+   - invalid / missing buckets where present
+4. apply declared pre-execution defaults before row evaluation,
+5. evaluate using primary-applicant data where the sheet says primary applicant only,
+6. enforce FIRST-HIT behavior exactly as stated in the sheets,
+7. write outputs to the exact BOM/domain/context locations,
+8. preserve traceability to sheet name, table name, matched row, matched row/column band where relevant, defaults applied, inputs used, and outputs written,
+9. add focused tests for extraction, normalization, condition parsing, first-hit evaluation, default handling, output writing, and stage integration.
 
-Modeling rules:
-- treat derived attribute names like BTS.all0000 as output targets
-- treat input parameters like all0000 as validated source field paths
-- treat formula/expression text as authoring syntax that must be normalized into explicit Java-executable structures
-- do not execute raw sheet formula text directly
-- do not use Tachyon for this stage
-- do not generate DRL for this stage
-- preserve traceability to row/rule id and raw formula text
+Risk Tier Tables specifics:
+- treat the sheet as matrix/band lookup logic
+- parse row bands and column bands correctly
+- support matrix lookup using the configured applicant-level scores
+- write outputs such as riskTier and related reason-code outputs to the configured BOM locations
+- preserve the exact first qualifying matrix result
 
-Support repeated patterns seen in the sheet such as:
-- for each applicant where applicant[i].primaryInd = 1
-- if input is null or unavailable then assign -1
-- else if input > threshold then assign transformed negative value
-- else assign original value
+Policy Tables specifics:
+- treat the sheet as ordered row-based policy lookup tables
+- parse multiple named table blocks such as min-fico and policy-indicator tables
+- support mixed condition columns and one or more output columns
+- apply pre-exec actions like initializing default outputs before first-hit row evaluation
+- allow intermediate policy-table outputs to be consumed by later tables if needed
 
-Implement clean separation of concerns:
-- InitializeImputeRow
-- InitializeImputeSheetExtractor
-- InitializeImputeDefinition
-- InitializeImputeRowNormalizer
-- InitializeImputeEvaluator
-- InitializeImputeStage
-- helper/writer class for BTS/derived attribute assignment if useful
-
-Validation requirements:
-- validate source and target paths using the shared field catalog
-- preserve compatibility with Application, DecisionContext, and later stages
-- extend the domain/BOM model only as needed for stable BTS/derived-attribute storage
-
-Stage requirements:
-- integrate Initialize & Impute into the intended fixed engine order
-- preserve existing Global Calcs, Knockout, and Error Scenarios behavior
-- do not change the Knockout/Error Scenarios Tachyon + DRL flow
-
-Testing requirements:
-- add focused tests for extraction
-- add normalization tests for representative rows
-- add evaluator tests for:
-  - null/unavailable -> -1
-  - threshold transform
-  - copy-through case
-  - primary-applicant-only filtering
-- add stage integration tests
-- verify full suite still passes
-
-At the end provide:
-- files added
-- files updated
-- files reverted or no longer used for Initialize & Impute
-- assumptions made
-- any ambiguous sheet rows interpreted
--  heuristically
-- For Initialize & Impute, keep all runtime behavior in Java evaluator/service logic so later debugging and payload-based validation are straightforward.
+Implementation constraints:
+- keep extraction, normalization, condition parsing, matrix/table evaluation, BOM writing, and tests separate
+- preserve existing Global Calcs, Knockout, Error Scenarios, and Initialize & Impute behavior
+- do not use Tachyon or DRL for these two sheets
+- keep runtime behavior deterministic and easy to debug
+- extend the shared field catalog and domain/context only as needed for clean output storage and later-stage consumption
+- at the end, clearly list files added/updated, assumptions made, and any ambiguous table cells or ranges interpreted heuristically
