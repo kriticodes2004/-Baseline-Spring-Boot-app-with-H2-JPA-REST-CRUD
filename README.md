@@ -1,43 +1,75 @@
 
-We are starting this project completely from scratch.
+Refactor only PolicyTableStage to make it generic and extensible from the Policy Tables sheet. Do not modify RiskTierStage behavior or logic.
 
-Build ONLY the Input Data foundation first. Do not implement any later sheets yet.
+Important:
+- leave RiskTierStage exactly as it is
+- do not refactor or change Risk Tier evaluation
+- do not change unrelated stages
+- do not use Tachyon
+- do not use DRL or Drools
+- keep this deterministic Java only
 
-Important clarification:
-The Input Data sheet is NOT a runtime rule stage.
-Do NOT build workbook extraction at runtime.
-Do NOT build workbook extraction during build.
-Do NOT add Apache POI generators.
-Do NOT use Tachyon, DRL, or Drools for the Input Data sheet.
+Goal:
+Make PolicyTableStage extensible so workbook updates of the same Policy Tables sheet structure can be applied without code changes.
 
-Treat the Input Data sheet only as a business specification/reference for manually creating the Java foundation.
+What to build for PolicyTableStage:
+1. A generic extractor for the Policy Tables sheet that can read multiple table blocks
+2. A normalized table definition model for each table block
+3. A generic ordered FIRST-HIT evaluator for populated policy tables
+4. Safe handling of empty table blocks:
+   - empty table sections are valid placeholders
+   - skip them safely without errors
+   - preserve them as future-expandable sheet structure
+5. Support table metadata from sheet:
+   - table name
+   - pre-execution action/default
+   - output columns
+   - BOM/output path if present
+6. Support generic row conditions from the sheet instead of hardcoding current tables
+7. Support common condition styles found in the current sheet, such as:
+   - equality
+   - IN / NOT IN list checks
+   - <=, <, >=, >
+   - N/A / blank / missing handling
+8. Write outputs using normalized table definitions, not table-specific evaluator branches
 
-What to implement from the Input Data sheet:
-1. Request DTO/contract classes matching the sheet structure
-2. Nested domain model classes for the runtime object graph (application, applicant, loan, merchant, bureau, models, contacts, etc.)
-3. DTO-to-domain mapper
-4. Shared field/path catalog for later stages
-5. Basic validation foundation from the sheet metadata:
-   - required/MVP fields where clearly indicated
-   - type validation
-   - allowed values/enums where defined
-6. Clean package structure and focused tests
+Extensibility requirements:
+- if new rows are added to an existing policy table, no code change should be needed
+- if a new policy table block of the same structure is added, no code change should be needed
+- if currently empty table blocks are filled later, no evaluator code change should be needed
+- evaluator logic must not be hardcoded to specific current table names like tblT50MinFICO or tblT51Policy
 
-Architecture rules for this task:
-- deterministic Java only
-- no runtime extraction
-- no build-time code generation
-- no Tachyon
-- no DRL
-- no Drools
-- keep DTOs, domain models, mapper, field catalog, and validation separate
-- use the workbook/Input Data sheet only as a reference/spec to decide what Java classes and fields to create
+Debug visibility:
+Add developer-visible logging/debug output for PolicyTableStage showing:
+- extracted table blocks
+- normalized table definitions
+- skipped empty blocks
+- pre-exec defaults applied
+- first-hit row selected
+- outputs written
+- stage summary
 
-What I want right now:
-- manually implemented Java foundation based on the Input Data sheet
-- clean, extensible classes
-- summary of files added/updated
-- assumptions made
-- focused tests
+Compatibility requirements:
+- preserve current integration with FixedStageDecisionEngine
+- do not change RiskTierStage
+- do not change current stage order
+- keep downstream consumers working
 
-Again: do NOT create Excel readers/generators/extractors for Input Data. Just implement the Java foundation from the sheet spec.
+Tests:
+Add focused tests for:
+- extraction of multiple policy table blocks
+- safe skipping of empty table blocks
+- first-hit evaluation
+- applying pre-exec defaults
+- adding new same-structure rows without evaluator code changes
+- filling a previously empty table block without evaluator code changes
+
+At the end, report:
+- files added
+- files updated
+- assumptions made from current Policy Tables sheet format
+- any unsupported condition grammar still remaining
+- exactly what kinds of future Excel changes will now work without code changes
+
+Again: do not modify RiskTierStage. Only make PolicyTableStage extensible.
+
