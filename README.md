@@ -1,410 +1,253 @@
-You are working inside a brand new Spring Boot Maven project.
+You have already generated the initial Input Data implementation for my Spring Boot project.
 
-Your task is to generate ONLY the initial Input Data layer for a Credit Decision Stand-in Service.
+Now refine and update the existing code by comparing it against the attached Input Data sheet screenshots.
 
-Important constraints:
-1. Do NOT implement Drools.
-2. Do NOT implement Tachyon.
-3. Do NOT implement workbook parsing.
-4. Do NOT implement business rules beyond input validation and primary applicant identification.
-5. Do NOT add extra architecture beyond what is asked.
-6. Keep the implementation clean, compilable, and minimal.
-7. Use Java 17, Spring Boot 3, Maven, Lombok, Jackson, and Bean Validation.
-8. Generate the exact package structure and classes listed below.
-9. Follow the folder structure exactly.
-10. If a field is not fully modeled yet, keep the class simple rather than inventing logic.
+Important:
+- Do NOT rewrite the architecture.
+- Do NOT introduce Drools, Tachyon, workflow engine logic, database, persistence, or business rules.
+- Stay within the existing Input Data scope only.
+- Use the current codebase as the base and only ADD / UPDATE what is needed.
+- Preserve package names and folder structure unless a small addition is necessary.
+- Do not rename existing classes unless absolutely necessary.
+- Do not remove working validation already present unless it clearly conflicts with the sheet.
 
-Goal of this phase:
-Take request JSON -> map into DTOs -> validate basic types/required fields/enums -> identify primary applicant -> return a normalized response.
+Goal:
+Make the DTO layer, enums, and input validation align more closely with the Input Data sheet and BOM mapping notes.
 
 ==================================================
-PROJECT PACKAGE
+CONTEXT
 ==================================================
 
-Base package:
-com.example.creditdecision
+This phase is only for the Input Data sheet.
 
-Create this exact structure:
+The Input Data sheet defines:
+- request field names
+- object nesting
+- types
+- lengths
+- allowed values
+- required MVP flags
+- JSON section mapping
+- upstream source notes
+- some field-level notes
 
-src/main/java/com/example/creditdecision
-  CreditDecisionApplication.java
+The project already has a first pass implementation with:
+- DecisionRequest
+- ApplicationDto
+- ApplicantDto
+- nested DTOs
+- enums
+- validation
+- normalization service
+- primary applicant utility
+- controller
+- exception handler
 
-src/main/java/com/example/creditdecision/api
-  DecisionController.java
-
-src/main/java/com/example/creditdecision/dto
-  DecisionRequest.java
-  ApplicationDto.java
-  ApplicantDto.java
-  LoanDto.java
-  MerchantDto.java
-  PlanDetailsDto.java
-  IncomeDto.java
-  NameDto.java
-  ContactDto.java
-  AddressDto.java
-  EmploymentDto.java
-  BureauDto.java
-  ModelDto.java
-
-src/main/java/com/example/creditdecision/enums
-  MarketSourceCode.java
-  ResidenceStatus.java
-  PhoneType.java
-  AddressType.java
-  EmploymentStatus.java
-  BureauCode.java
-
-src/main/java/com/example/creditdecision/service
-  InputNormalizationService.java
-
-src/main/java/com/example/creditdecision/exception
-  GlobalExceptionHandler.java
-
-src/main/java/com/example/creditdecision/util
-  PrimaryApplicantUtil.java
-
-Also update pom.xml correctly.
+Now I want you to compare the existing implementation with the attached Input Data screenshots and refine it carefully.
 
 ==================================================
-POM.XML REQUIREMENTS
+DO NOT CHANGE THESE HIGH-LEVEL RULES
 ==================================================
 
-Use:
-- spring-boot-starter-web
-- spring-boot-starter-validation
-- jackson-datatype-jsr310
-- lombok
-- spring-boot-starter-test
-
-Parent:
-org.springframework.boot:spring-boot-starter-parent:3.3.5
-
-Java version:
-17
-
-Enable Lombok annotation processing in maven-compiler-plugin.
+1. Keep Java 17 + Spring Boot + Lombok + Bean Validation.
+2. Keep the same package structure.
+3. Keep `/decision/evaluate`.
+4. Keep this phase limited to input mapping and validation.
+5. Do not add business calculations.
+6. Do not add stage pipeline logic.
+7. Do not add rules engine logic.
+8. Do not parse Excel files.
+9. Do not create output DTOs yet.
+10. Do not hardcode decision logic.
 
 ==================================================
-MAIN APPLICATION
+WHAT TO REVIEW AND UPDATE
 ==================================================
 
-Create:
-com.example.creditdecision.CreditDecisionApplication
+Review the existing DTOs against the Input Data sheet and do the following:
 
-Standard Spring Boot main class with @SpringBootApplication.
+### A. Verify top-level request mapping
+Ensure request structure remains:
 
-==================================================
-ENUMS
-==================================================
+- DecisionRequest
+  - application
 
-1. MarketSourceCode
-Values:
-- 01 = SCAN_TO_APPLY
-- 02 = EMAIL_TO_APPLY
-- 03 = INTERNET_MERCHANT_PORTAL
-- 04 = PHONE_APPLICATION
-- 05 = APPLY_ON_MERCHANT_DEVICE
+And under application:
+- applicationId
+- applicationDate
+- jointAppInd
+- marketSourceCode
+- applicant
+- loan
+- merchant
 
-Requirements:
-- store code as string
-- support Jackson serialization/deserialization
-- @JsonValue getter
-- @JsonCreator static fromCode(String value)
-- throw IllegalArgumentException for invalid code
+Keep JSON naming in camelCase.
 
-2. ResidenceStatus
-Values:
-- RENT
-- OWN
-- OTHER
+### B. Verify applicant-level nested structure
+Under applicant, ensure these object/nested groupings exist correctly:
 
-3. PhoneType
-Values:
-- HOME
-- MOBILE
-- WORK
-- OTHER
+- income
+- name
+- contacts
+- addresses
+- employment
+- bureau
+- models
 
-4. AddressType
-Values:
-- CURRENT
-- MAILING
-- OFFICE
-- HOME_PRESENT
-- HOME_PREVIOUS
+If any of these classes or fields are missing, add them.
 
-5. EmploymentStatus
-Values:
-- EMPLOYED
-- SELF_EMPLOYED
-- RETIRED
-- STUDENT
-- HOMEMAKER
-- UNEMPLOYED_WITHOUT_INCOME
+### C. Add any clearly missing fields from the screenshots
+Based on the Input Data screenshots, refine DTOs to include missing fields that are visible and clearly part of input scope.
 
-6. BureauCode
-Values:
-- EXP
-- EFX
-- TU
+Examples of visible fields that should exist if not already present:
+- totalAnnualIncome
+- additionalIncomes
+- firstName
+- middleInitial
+- lastName
+- suffix
+- phoneType
+- phoneNumber
+- type (address type)
+- addressLine1
+- addressLine2
+- addressLine3
+- city
+- state
+- zip
+- employmentStatus
+- bureauCode
+- bureauErrorIndicator
+- frozenFileInd
+- lockedFileOrWithheldIndicator
+- noHitInd
+- noTradeInd
+- actMtgTradeInd
+- minorIndicator
+- fico9Score
+- fico9AARC1
+- fico9AARC2
+- fico9AARC3
+- fico9AARC4
+- fico9AARC5
+- bureauTotMonthlyPmt
+- all0000
+- all0100
+- all0136
+- all2327
+- all8220
+- all8222
+- all8321
+- all9220
+- brc7140
+- iqt9416
+- iqt9425
+- iqt9426
+- pil0438
+- pil8120
+- reh5030
 
-==================================================
-DTO REQUIREMENTS
-==================================================
+If some of these are already present, keep them and do not duplicate.
 
-Use Lombok @Data for DTOs.
-Use jakarta.validation annotations.
+### D. Refine validation annotations
+Use the sheet to refine validation where obvious.
 
-1. DecisionRequest
-Fields:
-- @NotNull @Valid ApplicationDto application
+Examples:
+- applicationId max length 15
+- birthDate format YYYY-MM-DD
+- marketSourceCode enum codes 01 to 05
+- primaryInd should be 0 or 1
+- countryOfCitizenship length 2
+- phoneNumber should be 10 digits
+- state length 2
+- zip should support 5 or 9 digits
+- emailAddress max length should stay reasonable based on current implementation unless a better clear mapping is needed
+- numeric fields should use suitable numeric types like BigDecimal or Integer
 
-2. ApplicationDto
-Fields:
-- @NotBlank @Size(max = 15) String applicationId
-- @NotBlank String applicationDate
-- @NotNull Boolean jointAppInd
-- @NotNull MarketSourceCode marketSourceCode
-- @NotEmpty @Valid List<ApplicantDto> applicant
-- @NotNull @Valid LoanDto loan
-- @NotNull @Valid MerchantDto merchant
+Do not invent overly strict validation where the sheet is unclear.
 
-3. ApplicantDto
-Fields:
-- @NotNull @Min(0) @Max(1) Integer primaryInd
-- @NotBlank @Pattern("^\\d{4}-\\d{2}-\\d{2}$") String birthDate
-- @NotNull ResidenceStatus residenceStatus
-- @Size(min = 2, max = 2) String countryOfCitizenship
-- @Size(max = 320) String emailAddress
-- @Valid IncomeDto income
-- @Valid NameDto name
-- @Valid List<ContactDto> contacts
-- @Valid List<AddressDto> addresses
-- @Valid EmploymentDto employment
-- @Valid BureauDto bureau
-- @Valid List<ModelDto> models
+### E. Required MVP fields
+Use required flags conservatively.
 
-4. IncomeDto
-Fields:
-- @DecimalMin("0.0") BigDecimal totalAnnualIncome
-- @DecimalMin("0.0") BigDecimal additionalIncomes
+Only keep `@NotNull`, `@NotBlank`, `@NotEmpty` on fields that are clearly required for this MVP based on the existing implementation and visible sheet indicators.
 
-5. NameDto
-Fields:
-- @Size(max = 15) String firstName
-- @Size(max = 1) String middleInitial
-- @Size(max = 25) String lastName
-- @Size(max = 2) String suffix
+Do not suddenly mark everything required.
 
-6. ContactDto
-Fields:
-- PhoneType phoneType
-- @Pattern("^\\d{10}$") String phoneNumber
+### F. Enum refinement
+Verify enums against visible allowed values from the sheet and update if needed:
 
-7. AddressDto
-Fields:
-- AddressType type
-- @Size(max = 40) String addressLine1
-- @Size(max = 40) String addressLine2
-- @Size(max = 40) String addressLine3
-- @Size(max = 25) String city
-- @Size(min = 2, max = 2) String state
-- @Pattern("^\\d{5}(\\d{4})?$") String zip
+- MarketSourceCode:
+  01, 02, 03, 04, 05
+- ResidenceStatus:
+  RENT, OWN, OTHER
+- PhoneType:
+  HOME, MOBILE, WORK, OTHER
+- AddressType:
+  CURRENT, MAILING, OFFICE, HOME_PRESENT, HOME_PREVIOUS
+- EmploymentStatus:
+  EMPLOYED, SELF_EMPLOYED, RETIRED, STUDENT, HOMEMAKER, UNEMPLOYED_WITHOUT_INCOME
+- BureauCode:
+  EXP, EFX, TU
 
-8. EmploymentDto
-Fields:
-- EmploymentStatus employmentStatus
+Keep Jackson-friendly enum handling for MarketSourceCode.
 
-9. BureauDto
-Fields:
-- BureauCode bureauCode
-- Boolean bureauErrorIndicator
-- Boolean frozenFileInd
-- Boolean lockedFileOrWithheldIndicator
-- Boolean noHitInd
-- Boolean noTradeInd
-- Boolean actMtgTradeInd
-- Boolean minorIndicator
+### G. BOM / JSON naming note
+Important note from BOM Requirements:
+- Use built-in BOM-style naming aligned with JSON schema.
+- Output tabs were standardized to camelCase.
+- Keep field names in camelCase matching the JSON/input sheet naming.
+- Do not introduce snake_case or custom alternate naming.
 
-- Integer fico9Score
-- String fico9AARC1
-- String fico9AARC2
-- String fico9AARC3
-- String fico9AARC4
-- String fico9AARC5
+### H. Application date note
+From the notes:
+- applicationDate may need timezone standardization to Zulu/UTC later.
+For now:
+- keep it as String in DTO
+- do not implement full date conversion yet
+- optionally add a comment in code or normalization service noting that UTC normalization will happen in a later phase
 
-- BigDecimal bureauTotMonthlyPmt
+### I. Normalization service
+Keep InputNormalizationService simple.
+Only update it if needed to reflect any added fields that are useful for input acceptance summary.
 
-- Integer all0000
-- Integer all0100
-- Integer all0136
-- Integer all2327
-- Integer all8220
-- Integer all8222
-- Integer all8321
-- Integer all9220
-- Integer brc7140
-- Integer iqt9416
-- Integer iqt9425
-- Integer iqt9426
-- Integer pil0438
-- Integer pil8120
-- Integer reh5030
+Do not add business logic.
+Do not compute derived fields.
+Do not transform deeply yet.
 
-10. ModelDto
-Empty class with Lombok @Data only.
+### J. Primary applicant utility
+Keep primary applicant detection logic as:
+- first applicant where primaryInd == 1
 
-11. LoanDto
-Fields:
-- BigDecimal loanAmount
-
-12. MerchantDto
-Fields:
-- List<PlanDetailsDto> planDetails
-
-13. PlanDetailsDto
-Fields:
-- BigDecimal monthlyInstallment
+Do not overcomplicate it.
 
 ==================================================
-UTILITY
+DELIVERABLE
 ==================================================
 
-Create PrimaryApplicantUtil.
+Please do the following in the existing project:
 
-Requirements:
-- final utility class
-- private constructor
-- static method:
-  Optional<ApplicantDto> findPrimaryApplicant(List<ApplicantDto> applicants)
-
-Logic:
-- if list is null, return Optional.empty()
-- return first applicant where primaryInd == 1
-
-==================================================
-SERVICE
-==================================================
-
-Create InputNormalizationService.
-
-Method:
-public Map<String, Object> normalize(DecisionRequest request)
-
-Logic:
-- find primary applicant using PrimaryApplicantUtil
-- if none found, throw IllegalArgumentException("No primary applicant found")
-- return a LinkedHashMap with:
-  - "message" -> "Input accepted"
-  - "applicationId"
-  - "applicationDate"
-  - "jointAppInd"
-  - "marketSourceCode" -> enum code string
-  - "primaryApplicantBirthDate"
-  - "primaryApplicantResidenceStatus"
-  - "primaryApplicantCountry"
-  - if income exists:
-      "primaryApplicantTotalAnnualIncome"
-      "primaryApplicantAdditionalIncomes"
-
-Do not add business calculations.
+1. Review all current files created for Input Data.
+2. Update DTOs/enums/validation to align better with the attached Input Data sheet.
+3. Add only missing fields/classes that are clearly supported by the screenshots.
+4. Keep the code compiling.
+5. Show me:
+   - which files were updated
+   - what fields were added/changed
+   - any validation changes made
+   - any assumptions kept intentionally loose
 
 ==================================================
-CONTROLLER
+VERY IMPORTANT RESTRICTIONS
 ==================================================
 
-Create DecisionController.
+- Do not generate unrelated files.
+- Do not replace the architecture.
+- Do not add service layers other than minimal input-layer refinements.
+- Do not add rule processing.
+- Do not add output schema classes.
+- Do not add database entities.
+- Do not add repository layer.
+- Do not add configuration unless required for compilation.
+- Do not break existing endpoint behavior.
 
-Requirements:
-- @RestController
-- @RequestMapping("/decision")
-- constructor injection with Lombok @RequiredArgsConstructor
-- endpoint:
-  @PostMapping("/evaluate")
-  public ResponseEntity<Map<String, Object>> evaluate(@Valid @RequestBody DecisionRequest request)
-
-Logic:
-- call InputNormalizationService.normalize(request)
-- return ResponseEntity.ok(result)
-
-==================================================
-EXCEPTION HANDLER
-==================================================
-
-Create GlobalExceptionHandler with @RestControllerAdvice.
-
-1. Handle MethodArgumentNotValidException
-Return HTTP 400 with body:
-- errorInd = true
-- errorId = "VALIDATION_ERROR"
-- errorMessage = joined field validation messages
-
-2. Handle IllegalArgumentException
-Return HTTP 400 with body:
-- errorInd = true
-- errorId = "INPUT_ERROR"
-- errorMessage = exception message
-
-Use LinkedHashMap for response bodies.
-
-==================================================
-CODING STYLE
-==================================================
-
-- Use clean imports
-- Use jakarta.validation package, not javax
-- Use Lombok annotations
-- Code must compile
-- No placeholder TODOs
-- No extra files beyond what is requested unless absolutely needed for compilation
-- No business-rule engine code
-- No persistence layer
-- No database
-- No Swagger
-- No security
-- No tests yet
-
-==================================================
-AFTER GENERATING FILES
-==================================================
-
-Also generate a sample valid request JSON in a comment block or separate snippet for easy POST testing:
-
-{
-  "application": {
-    "applicationId": "APP123456789012",
-    "applicationDate": "2026-04-16T10:30:00.000Z",
-    "jointAppInd": false,
-    "marketSourceCode": "03",
-    "applicant": [
-      {
-        "primaryInd": 1,
-        "birthDate": "1995-02-10",
-        "residenceStatus": "RENT",
-        "countryOfCitizenship": "US",
-        "emailAddress": "kriti@test.com",
-        "income": {
-          "totalAnnualIncome": 85000,
-          "additionalIncomes": 5000
-        },
-        "name": {
-          "firstName": "Kriti",
-          "lastName": "Khurana"
-        }
-      }
-    ],
-    "loan": {
-      "loanAmount": 12000
-    },
-    "merchant": {
-      "planDetails": [
-        {
-          "monthlyInstallment": 400
-        }
-      ]
-    }
-  }
-}
-
-Now create all files exactly as instructed.
+Work as a refinement pass over the current Input Data implementation only.
