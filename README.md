@@ -1,363 +1,161 @@
-You are working in an existing Spring Boot Maven project for a Credit Decision Stand-in Service.
-
-Assume you have NO prior context other than this prompt.
-Implement exactly what is described here.
+Continue the same implementation of the Tachyon-based Knockout Authoring pipeline.
 
 ==================================================
-HIGH-LEVEL GOAL
+6) COMPLETE KnockoutPromptBuilder.java
 ==================================================
-
-Implement the Tachyon-based Knockout Authoring pipeline.
-
-This stage is NOT the runtime knockout execution engine.
-This stage is the AI authoring pipeline that does:
-
-1. accept knockout sheet text
-2. build a sheet-specific Tachyon prompt
-3. call Tachyon through one reusable client
-4. parse normalized JSON output
-5. validate the normalized artifact
-6. render Drools DRL from the normalized artifact
-7. preserve authoring traceability
-
-This stage must support the idea that:
-- one common Tachyon caller will be reused for all future Tachyon-authored sheets
-- each sheet will provide its own specialized prompt/context builder
-- the knockout sheet is the first such implementation
-
-==================================================
-IMPORTANT RESTRICTIONS
-==================================================
-
-Do NOT do any of the following:
-- Do NOT implement runtime knockout evaluation in this stage
-- Do NOT implement Drools runtime execution in this stage
-- Do NOT implement workbook parsing from Excel files
-- Do NOT implement Input Data, Initialize & Impute, Global Calcs, Error Scenarios, or final decision logic
-- Do NOT redesign the current architecture
-- Do NOT add database/persistence/repositories
-- Do NOT add security
-- Do NOT hardcode secrets in source code
-- Do NOT invent unrelated files
-- Do NOT add TODO placeholders
-
-Use environment-variable-backed Spring properties for Tachyon credentials/config.
-
-==================================================
-BASE PACKAGE
-==================================================
-
-Use this exact base package:
-
-com.example.creditdecision
-
-==================================================
-WHAT THIS STAGE SHOULD DELIVER
-==================================================
-
-After implementation, the project should have:
-- a reusable Tachyon HTTP caller
-- knockout-specific prompt builder
-- knockout artifact models
-- knockout normalization validator
-- knockout DRL renderer
-- knockout authoring service
-- a REST endpoint to submit sheet text for authoring
-
-The endpoint should accept raw sheet text and return:
-- normalized artifact
-- validation result
-- rendered DRL
-- authoring trace
-
-==================================================
-FILES TO ADD
-==================================================
-
-Create these files exactly:
-
-src/main/java/com/example/creditdecision/tachyon/config/TachyonProperties.java
-src/main/java/com/example/creditdecision/tachyon/model/TachyonChatMessage.java
-src/main/java/com/example/creditdecision/tachyon/model/TachyonChatRequest.java
-src/main/java/com/example/creditdecision/tachyon/model/TachyonChatResponse.java
-src/main/java/com/example/creditdecision/tachyon/model/TachyonChoice.java
-src/main/java/com/example/creditdecision/tachyon/model/TachyonResponseMessage.java
-
-src/main/java/com/example/creditdecision/tachyon/client/TachyonClient.java
-
-src/main/java/com/example/creditdecision/authoring/knockout/model/KnockoutSheetArtifact.java
-src/main/java/com/example/creditdecision/authoring/knockout/model/KnockoutRuleArtifact.java
-src/main/java/com/example/creditdecision/authoring/knockout/model/ConditionNode.java
-src/main/java/com/example/creditdecision/authoring/knockout/model/RuleAction.java
-src/main/java/com/example/creditdecision/authoring/knockout/model/RuleScope.java
-src/main/java/com/example/creditdecision/authoring/knockout/model/ValidationResult.java
-src/main/java/com/example/creditdecision/authoring/knockout/model/AuthoringTrace.java
-
-src/main/java/com/example/creditdecision/authoring/knockout/prompt/KnockoutPromptBuilder.java
-src/main/java/com/example/creditdecision/authoring/knockout/service/KnockoutNormalizationValidator.java
-src/main/java/com/example/creditdecision/authoring/knockout/service/KnockoutDroolsRenderer.java
-src/main/java/com/example/creditdecision/authoring/knockout/service/KnockoutAuthoringService.java
-
-src/main/java/com/example/creditdecision/api/KnockoutAuthoringController.java
-
-==================================================
-FILES TO UPDATE
-==================================================
-
-Update if needed:
-- src/main/resources/application.properties
-- pom.xml only if required for compilation
-
-Do NOT modify unrelated business classes.
-
-==================================================
-APPLICATION.PROPERTIES REQUIREMENTS
-==================================================
-
-Add these properties using env variable placeholders only:
-
-credit.rules.version=${CREDIT_RULES_VERSION:POC_2504.01}
-
-tachyon.chat.url=${TACHYON_CHAT_URL}
-tachyon.api-key=${TACHYON_API_KEY}
-tachyon.usecase-id=${TACHYON_USECASE_ID}
-tachyon.apigee.access-token=${TACHYON_ACCESS_TOKEN}
-tachyon.client-id=${TACHYON_CLIENT_ID}
-tachyon.api-version=${TACHYON_API_VERSION:0.01}
-tachyon.orig-client-id=${TACHYON_ORIG_CLIENT_ID}
-tachyon.cmp-id=${TACHYON_CMP_ID}
-tachyon.chat.model=${TACHYON_MODEL:gpt4.1}
-tachyon.chat.max-tokens=${TACHYON_MAX_TOKENS:8000}
-
-Do not hardcode tokens or secret values.
-
-==================================================
-1) CREATE TachyonProperties.java
-==================================================
-
-Package:
-com.example.creditdecision.tachyon.config
-
-Requirements:
-- Use @Configuration
-- Use @ConfigurationProperties(prefix = "tachyon")
-- Use Lombok @Data
-- Include fields:
-  - String chatUrl
-  - String apiKey
-  - String usecaseId
-  - String apigeeAccessToken
-  - String clientId
-  - String apiVersion
-  - String origClientId
-  - String cmpId
-  - Chat chat = new Chat()
-
-Nested static class Chat:
-- String model
-- Integer maxTokens
-
-==================================================
-2) CREATE Tachyon model classes
-==================================================
-
-Package:
-com.example.creditdecision.tachyon.model
-
-Create these exact classes:
-
-A. TachyonChatMessage
-- fields:
-  - String role
-  - String content
-- annotations:
-  - @Data
-  - @AllArgsConstructor
-  - @NoArgsConstructor
-
-B. TachyonChatRequest
-- fields:
-  - String model
-  - List<TachyonChatMessage> messages
-  - Double temperature
-  - Integer maxTokens
-- annotate maxTokens with @JsonProperty("max_tokens")
-- use Lombok @Data
-
-C. TachyonResponseMessage
-- fields:
-  - String role
-  - String content
-- use Lombok @Data
-
-D. TachyonChoice
-- fields:
-  - Integer index
-  - TachyonResponseMessage message
-- use Lombok @Data
-
-E. TachyonChatResponse
-- fields:
-  - String id
-  - List<TachyonChoice> choices
-- use Lombok @Data
-
-==================================================
-3) CREATE TachyonClient.java
-==================================================
-
-Package:
-com.example.creditdecision.tachyon.client
-
-Requirements:
-- Use @Component
-- Use constructor injection via Lombok @RequiredArgsConstructor
-- Dependencies:
-  - TachyonProperties
-  - ObjectMapper
 
 Implement method:
-- public TachyonChatResponse chat(TachyonChatRequest requestBody)
+- public String buildUserPrompt(String knockoutSheetText)
 
-Behavior:
-1. generate requestId using UUID.randomUUID().toString()
-2. serialize requestBody to JSON using ObjectMapper
-3. send HTTP POST using java.net.http.HttpClient
-4. use URL from properties.getChatUrl()
-5. set headers exactly:
-   - Authorization: Bearer <apigeeAccessToken>
-   - Content-Type: application/json
-   - Accept: */*
-   - X-REQUEST-ID
-   - X-CORRELATION-ID
-   - X-WF-REQUEST-DATE = Instant.now().toString()
-   - X-WF-CLIENT-ID
-   - X-WF-ORIG-CLIENT-ID
-   - X-WF-CMP-ID
-   - X-WF-API-VERSION
-   - X-WF-API-KEY
-   - X-WF-USECASE-ID
-6. if HTTP status is not 2xx, throw IllegalStateException with status/body
-7. parse response JSON into TachyonChatResponse
+This user prompt must include all of the following:
 
-Implement helper method:
-- public String extractFirstContent(TachyonChatResponse response)
+1. sheet name = Knockout Calcs & Policy
+2. sheet purpose
+3. execution semantics:
+   - execute knockout calcs first
+   - then knockout policy rows
+   - if any knockout policy triggers, create policy under application.decisionDetails.policies
+   - for MVP evaluate only primary applicant where primaryInd = 1
+4. interpretation rules:
+   - preserve condition grouping exactly
+   - preserve raw vs BTS fields
+   - represent primary applicant wording as PRIMARY_ONLY scope
+   - Create Policy = action type CREATE_POLICY
+   - use policyCode and policyCategory exactly
+   - use BOM location exactly
+   - preserve null checks explicitly
+   - if calcs section empty, return empty calcDefinitions
+5. field path conventions:
+   - application.applicant[].bureau.<field>
+   - bts.<field>
+   - application.decisionDetails.policies
+6. required output schema example
+7. few-shot example 1 for Q18
+8. few-shot example 2 for D22 preserving grouped logic
+9. append the passed knockoutSheetText at the end
 
-Behavior:
-- read first choice message content
-- if missing, throw IllegalStateException("No message content returned from Tachyon")
-
-Important:
-- handle IOException and InterruptedException
-- if interrupted, re-set interrupt flag and throw IllegalStateException
-- do not print secrets
-- do not log payloads here
+The prompt must be detailed and optimized for extraction quality.
 
 ==================================================
-4) CREATE knockout artifact model classes
+7) CREATE KnockoutNormalizationValidator.java
 ==================================================
 
 Package:
-com.example.creditdecision.authoring.knockout.model
-
-A. RuleScope
-- fields:
-  - String applicantFilter
-  - String applicantIndexSource
-- use Lombok @Data
-
-B. RuleAction
-- fields:
-  - String type
-  - String target
-  - String policyCode
-  - String policyCategory
-- use Lombok @Data
-
-C. ConditionNode
-- fields:
-  - String logic
-  - List<ConditionNode> children
-  - String field
-  - String operator
-  - Object value
-  - String nullTreatment
-- use Lombok @Data
-- use @JsonInclude(JsonInclude.Include.NON_NULL)
-
-D. KnockoutRuleArtifact
-- fields:
-  - String ruleId
-  - String ruleName
-  - String policyCode
-  - String policyCategory
-  - String locationInBom
-  - RuleScope scope
-  - List<String> inputs = new ArrayList<>()
-  - ConditionNode conditionTree
-  - RuleAction action
-  - List<String> notes = new ArrayList<>()
-- use Lombok @Data
-
-E. KnockoutSheetArtifact
-- fields:
-  - String sheetType
-  - String sheetName
-  - Map<String, Object> instructions
-  - List<Map<String, Object>> calcDefinitions = new ArrayList<>()
-  - List<KnockoutRuleArtifact> policyDefinitions = new ArrayList<>()
-- use Lombok @Data
-
-F. ValidationResult
-- fields:
-  - boolean valid
-  - List<String> errors = new ArrayList<>()
-  - List<String> warnings = new ArrayList<>()
-- use Lombok @Data
-
-G. AuthoringTrace
-- fields:
-  - Instant createdAt = Instant.now()
-  - String sheetName
-  - String rawPrompt
-  - String rawResponse
-  - ValidationResult validationResult
-  - List<String> generatedFiles = new ArrayList<>()
-- use Lombok @Data
-
-==================================================
-5) CREATE KnockoutPromptBuilder.java
-==================================================
-
-Package:
-com.example.creditdecision.authoring.knockout.prompt
+com.example.creditdecision.authoring.knockout.service
 
 Requirements:
-- Use @Component
-- Use @RequiredArgsConstructor
-- dependency:
-  - TachyonProperties
+- Use @Service
+
+Implement validation for the normalized artifact.
+
+Allowed fields set:
+- application.applicant[].bureau.frozenFileInd
+- application.applicant[].bureau.lockedFileOrWithheldIndicator
+- application.applicant[].bureau.bureauErrorIndicator
+- application.applicant[].bureau.noTradeInd
+- application.applicant[].bureau.noHitInd
+- application.applicant[].bureau.minorIndicator
+- bts.all0300
+
+Allowed operators set:
+- EQ
+- IN
+- NE
+- GT
+- GTE
+- LT
+- LTE
 
 Implement method:
-- public TachyonChatRequest buildRequest(String knockoutSheetText)
+- public ValidationResult validate(KnockoutSheetArtifact artifact)
+
+Validation behavior:
+- if artifact null -> invalid
+- if policyDefinitions empty -> warning
+- validate each rule:
+  - ruleId present
+  - ruleName present
+  - policyCode present
+  - policyCategory present
+  - locationInBom present
+  - if locationInBom is not application.decisionDetails.policies -> warning
+  - duplicate policy codes -> warning
+  - missing explicit scope -> warning
+  - missing action -> error
+  - if action type != CREATE_POLICY -> warning
+  - validate conditionTree recursively
+
+Implement recursive helper:
+- validateConditionNode(...)
+
+Rules:
+- node must be either a group node (logic + children) or leaf node (field/operator/value)
+- unknown field -> warning
+- unsupported operator -> error
+
+If errors exist, set valid = false.
+Otherwise valid = true.
+
+==================================================
+8) CREATE KnockoutDroolsRenderer.java
+==================================================
+
+Package:
+com.example.creditdecision.authoring.knockout.service
+
+Requirements:
+- Use @Service
+
+Implement method:
+- public String render(KnockoutSheetArtifact artifact)
 
 Behavior:
-- model = properties.getChat().getModel()
-- temperature = 0.1
-- maxTokens = properties.getChat().getMaxTokens()
-- messages = system + user prompt
+- generate DRL text
+- add package line: com.example.creditdecision.rules.knockout
+- import ExecutionContext
+- import PolicyCreationService (even if not implemented yet; this is authoring output)
 
-Implement method:
-- public String buildSystemPrompt()
+For each rule, render one DRL rule.
 
-System prompt must instruct Tachyon to:
-- act as a business-rule authoring assistant
-- convert spreadsheet knockout rules into normalized JSON
-- preserve rule meaning exactly
-- not generate Java
-- not generate Drools yet
-- not flatten grouped boolean logic incorrectly
-- not drop null handling
-- not invent missing fields
-- mark ambiguity in notes instead of guessing
-- return only valid JSON
+Implement helper:
+- private String renderRule(KnockoutRuleArtifact rule)
+
+Template:
+rule "<RULE_ID>_<POLICY_CODE>"
+when
+    $ctx : ExecutionContext()
+    eval(<generated_boolean_expression>)
+then
+    PolicyCreationService.addPolicy($ctx, "<ruleId>", "<policyCode>", "<policyCategory>", "<ruleName>");
+end
+
+Implement recursive helper:
+- private String toDroolsExpression(ConditionNode node)
+
+Support:
+- grouped nodes with AND / OR
+- leaf operators:
+  - EQ
+  - NE
+  - IN
+
+Implement helper:
+- private String renderInExpression(String accessor, Object value)
+
+Implement helper:
+- private String toAccessor(String field)
+
+Map these fields:
+- application.applicant[].bureau.frozenFileInd -> $ctx.getPrimaryApplicant().getBureau().getFrozenFileInd()
+- application.applicant[].bureau.lockedFileOrWithheldIndicator -> $ctx.getPrimaryApplicant().getBureau().getLockedFileOrWithheldIndicator()
+- application.applicant[].bureau.bureauErrorIndicator -> $ctx.getPrimaryApplicant().getBureau().getBureauErrorIndicator()
+- application.applicant[].bureau.noTradeInd -> $ctx.getPrimaryApplicant().getBureau().getNoTradeInd()
+- application.applicant[].bureau.noHitInd -> $ctx.getPrimaryApplicant().getBureau().getNoHitInd()
+- application.applicant[].bureau.minorIndicator -> $ctx.getPrimaryApplicant().getBureau().getMinorIndicator()
+- bts.all0300 -> $ctx.getBusinessTermSet().getAll0300()
+
+Throw IllegalArgumentException for unsupported fields/operators.
+
+Implement helper:
+- private String renderValue(Object value)
+- private String escape(String input)
