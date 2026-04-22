@@ -1,253 +1,546 @@
-You have already generated the initial Input Data implementation for my Spring Boot project.
+You are working in an existing Spring Boot Maven project for a Credit Decision Stand-in Service.
 
-Now refine and update the existing code by comparing it against the attached Input Data sheet screenshots.
+The Input Data layer is already implemented and the `/decision/evaluate` endpoint is already accepting Postman requests successfully.
+
+Now implement the next stage: **Initialize & Impute**.
 
 Important:
-- Do NOT rewrite the architecture.
-- Do NOT introduce Drools, Tachyon, workflow engine logic, database, persistence, or business rules.
-- Stay within the existing Input Data scope only.
-- Use the current codebase as the base and only ADD / UPDATE what is needed.
-- Preserve package names and folder structure unless a small addition is necessary.
-- Do not rename existing classes unless absolutely necessary.
-- Do not remove working validation already present unless it clearly conflicts with the sheet.
+- Generate only what is needed for Initialize & Impute.
+- Do NOT implement Drools.
+- Do NOT implement Tachyon.
+- Do NOT implement workbook parsing.
+- Do NOT implement knockout logic.
+- Do NOT implement global calcs yet.
+- Do NOT implement error scenarios yet.
+- Do NOT implement risk tier tables yet.
+- Do NOT implement final decision logic yet.
+- Do NOT add database/persistence/repositories.
+- Do NOT add trace logging yet.
+- Do NOT redesign the existing architecture.
+- Update and extend the current codebase in place.
 
-Goal:
-Make the DTO layer, enums, and input validation align more closely with the Input Data sheet and BOM mapping notes.
+The goal of this stage is:
+1. create an internal execution context
+2. initialize internal decision containers
+3. identify the primary applicant
+4. create and populate a Business Term Set (BTS)
+5. impute BTS values for the primary applicant
+6. derive early decision fields:
+   - primFico
+   - ficoReasonCodes
+   - primCustomScore
+   - customReasonCodes
+7. return an initialization summary from `/decision/evaluate`
 
 ==================================================
-CONTEXT
+EXISTING PROJECT CONTEXT
 ==================================================
 
-This phase is only for the Input Data sheet.
+Base package:
+com.example.creditdecision
 
-The Input Data sheet defines:
-- request field names
-- object nesting
-- types
-- lengths
-- allowed values
-- required MVP flags
-- JSON section mapping
-- upstream source notes
-- some field-level notes
-
-The project already has a first pass implementation with:
-- DecisionRequest
-- ApplicationDto
-- ApplicantDto
-- nested DTOs
+The project already has:
+- DTO request classes
 - enums
-- validation
-- normalization service
-- primary applicant utility
-- controller
-- exception handler
+- DecisionController
+- InputNormalizationService
+- GlobalExceptionHandler
+- PrimaryApplicantUtil
+- /decision/evaluate endpoint
 
-Now I want you to compare the existing implementation with the attached Input Data screenshots and refine it carefully.
-
-==================================================
-DO NOT CHANGE THESE HIGH-LEVEL RULES
-==================================================
-
-1. Keep Java 17 + Spring Boot + Lombok + Bean Validation.
-2. Keep the same package structure.
-3. Keep `/decision/evaluate`.
-4. Keep this phase limited to input mapping and validation.
-5. Do not add business calculations.
-6. Do not add stage pipeline logic.
-7. Do not add rules engine logic.
-8. Do not parse Excel files.
-9. Do not create output DTOs yet.
-10. Do not hardcode decision logic.
+Do NOT remove these.
+Only update what is needed.
 
 ==================================================
-WHAT TO REVIEW AND UPDATE
+FILES TO ADD
 ==================================================
 
-Review the existing DTOs against the Input Data sheet and do the following:
+Create these files exactly:
 
-### A. Verify top-level request mapping
-Ensure request structure remains:
+src/main/java/com/example/creditdecision/model/ExecutionContext.java
+src/main/java/com/example/creditdecision/model/BusinessTermSet.java
+src/main/java/com/example/creditdecision/model/DecisionDetails.java
+src/main/java/com/example/creditdecision/model/Policy.java
+src/main/java/com/example/creditdecision/model/ErrorDetail.java
+src/main/java/com/example/creditdecision/model/ModelReasonCode.java
 
-- DecisionRequest
-  - application
+src/main/java/com/example/creditdecision/service/InitializeImputeService.java
 
-And under application:
-- applicationId
-- applicationDate
-- jointAppInd
-- marketSourceCode
-- applicant
-- loan
-- merchant
+==================================================
+FILES TO UPDATE
+==================================================
 
-Keep JSON naming in camelCase.
+Update these existing files:
 
-### B. Verify applicant-level nested structure
-Under applicant, ensure these object/nested groupings exist correctly:
+src/main/java/com/example/creditdecision/dto/ModelDto.java
+src/main/java/com/example/creditdecision/dto/BureauDto.java
+src/main/java/com/example/creditdecision/service/InputNormalizationService.java
+src/main/java/com/example/creditdecision/api/DecisionController.java
 
-- income
-- name
-- contacts
-- addresses
-- employment
-- bureau
-- models
+Do not modify other files unless absolutely necessary for compilation.
 
-If any of these classes or fields are missing, add them.
+==================================================
+WHAT INITIALIZE & IMPUTE MEANS HERE
+==================================================
 
-### C. Add any clearly missing fields from the screenshots
-Based on the Input Data screenshots, refine DTOs to include missing fields that are visible and clearly part of input scope.
+This stage is NOT just null initialization.
 
-Examples of visible fields that should exist if not already present:
-- totalAnnualIncome
-- additionalIncomes
-- firstName
-- middleInitial
-- lastName
-- suffix
-- phoneType
-- phoneNumber
-- type (address type)
-- addressLine1
-- addressLine2
-- addressLine3
-- city
-- state
-- zip
-- employmentStatus
-- bureauCode
-- bureauErrorIndicator
-- frozenFileInd
-- lockedFileOrWithheldIndicator
-- noHitInd
-- noTradeInd
-- actMtgTradeInd
-- minorIndicator
-- fico9Score
-- fico9AARC1
-- fico9AARC2
-- fico9AARC3
-- fico9AARC4
-- fico9AARC5
-- bureauTotMonthlyPmt
+It must do 3 things:
+
+A. Initialize internal runtime context
+- create ExecutionContext
+- store request
+- store primary applicant
+- initialize decisionDetails
+- initialize applicationPolicies as empty list
+- initialize errorDetails as empty list
+- initialize businessTermSet
+
+B. Impute Business Term Set (BTS) values for the primary applicant
+These fields are sanitized versions of upstream bureau values and will be used by later rules.
+
+C. Derive early score-related fields
+- primFico
+- ficoReasonCodes
+- primCustomScore
+- customReasonCodes
+
+==================================================
+1) UPDATE ModelDto.java
+==================================================
+
+ModelDto must no longer be empty.
+
+Update it to contain exactly these fields:
+
+- String name
+- String score
+- Boolean errorIndicator
+- String aarc1
+- String aarc2
+- String aarc3
+- String aarc4
+
+Use Lombok @Data.
+
+==================================================
+2) UPDATE BureauDto.java
+==================================================
+
+Keep existing fields and ADD any missing fields needed by Initialize & Impute.
+
+BureauDto must contain these Integer fields if not already present:
+- reh7120
+- rev7140
+- use0300
+- wfccbkcy
+- wfccchof
+- wfccfore
+- wfccrepo
+- wfccstld
+
+Do not remove existing bureau fields.
+Only add missing ones.
+
+==================================================
+3) CREATE model/ExecutionContext.java
+==================================================
+
+Create an internal runtime context class with Lombok @Data.
+
+Fields:
+- DecisionRequest request
+- ApplicantDto primaryApplicant
+- BusinessTermSet businessTermSet
+- DecisionDetails decisionDetails
+- List<Policy> applicationPolicies = new ArrayList<>()
+- List<ErrorDetail> errorDetails = new ArrayList<>()
+
+Package:
+com.example.creditdecision.model
+
+Imports must use existing DTO classes.
+
+==================================================
+4) CREATE model/BusinessTermSet.java
+==================================================
+
+Create a Lombok @Data class with these Integer fields:
+
 - all0000
 - all0100
 - all0136
+- all0300
 - all2327
 - all8220
 - all8222
 - all8321
 - all9220
 - brc7140
-- iqt9416
 - iqt9425
 - iqt9426
 - pil0438
 - pil8120
 - reh5030
+- reh7120
+- rev7140
+- use0300
+- wfccbkcy
+- wfccchof
+- wfccfore
+- wfccrepo
+- wfccstld
 
-If some of these are already present, keep them and do not duplicate.
-
-### D. Refine validation annotations
-Use the sheet to refine validation where obvious.
-
-Examples:
-- applicationId max length 15
-- birthDate format YYYY-MM-DD
-- marketSourceCode enum codes 01 to 05
-- primaryInd should be 0 or 1
-- countryOfCitizenship length 2
-- phoneNumber should be 10 digits
-- state length 2
-- zip should support 5 or 9 digits
-- emailAddress max length should stay reasonable based on current implementation unless a better clear mapping is needed
-- numeric fields should use suitable numeric types like BigDecimal or Integer
-
-Do not invent overly strict validation where the sheet is unclear.
-
-### E. Required MVP fields
-Use required flags conservatively.
-
-Only keep `@NotNull`, `@NotBlank`, `@NotEmpty` on fields that are clearly required for this MVP based on the existing implementation and visible sheet indicators.
-
-Do not suddenly mark everything required.
-
-### F. Enum refinement
-Verify enums against visible allowed values from the sheet and update if needed:
-
-- MarketSourceCode:
-  01, 02, 03, 04, 05
-- ResidenceStatus:
-  RENT, OWN, OTHER
-- PhoneType:
-  HOME, MOBILE, WORK, OTHER
-- AddressType:
-  CURRENT, MAILING, OFFICE, HOME_PRESENT, HOME_PREVIOUS
-- EmploymentStatus:
-  EMPLOYED, SELF_EMPLOYED, RETIRED, STUDENT, HOMEMAKER, UNEMPLOYED_WITHOUT_INCOME
-- BureauCode:
-  EXP, EFX, TU
-
-Keep Jackson-friendly enum handling for MarketSourceCode.
-
-### G. BOM / JSON naming note
-Important note from BOM Requirements:
-- Use built-in BOM-style naming aligned with JSON schema.
-- Output tabs were standardized to camelCase.
-- Keep field names in camelCase matching the JSON/input sheet naming.
-- Do not introduce snake_case or custom alternate naming.
-
-### H. Application date note
-From the notes:
-- applicationDate may need timezone standardization to Zulu/UTC later.
-For now:
-- keep it as String in DTO
-- do not implement full date conversion yet
-- optionally add a comment in code or normalization service noting that UTC normalization will happen in a later phase
-
-### I. Normalization service
-Keep InputNormalizationService simple.
-Only update it if needed to reflect any added fields that are useful for input acceptance summary.
-
-Do not add business logic.
-Do not compute derived fields.
-Do not transform deeply yet.
-
-### J. Primary applicant utility
-Keep primary applicant detection logic as:
-- first applicant where primaryInd == 1
-
-Do not overcomplicate it.
+Package:
+com.example.creditdecision.model
 
 ==================================================
-DELIVERABLE
+5) CREATE model/DecisionDetails.java
 ==================================================
 
-Please do the following in the existing project:
+Create a Lombok @Data class with:
 
-1. Review all current files created for Input Data.
-2. Update DTOs/enums/validation to align better with the attached Input Data sheet.
-3. Add only missing fields/classes that are clearly supported by the screenshots.
-4. Keep the code compiling.
-5. Show me:
-   - which files were updated
-   - what fields were added/changed
-   - any validation changes made
-   - any assumptions kept intentionally loose
+- Integer primFico = -1
+- Double primCustomScore = -1.0
+- List<ModelReasonCode> ficoReasonCodes = new ArrayList<>()
+- List<ModelReasonCode> customReasonCodes = new ArrayList<>()
+- List<Policy> policies = new ArrayList<>()
+
+Package:
+com.example.creditdecision.model
 
 ==================================================
-VERY IMPORTANT RESTRICTIONS
+6) CREATE model/Policy.java
 ==================================================
 
-- Do not generate unrelated files.
-- Do not replace the architecture.
-- Do not add service layers other than minimal input-layer refinements.
-- Do not add rule processing.
-- Do not add output schema classes.
-- Do not add database entities.
-- Do not add repository layer.
-- Do not add configuration unless required for compilation.
-- Do not break existing endpoint behavior.
+Create a simple Lombok @Data class with:
+- String policyCode
+- String policyDescription
 
-Work as a refinement pass over the current Input Data implementation only.
+Package:
+com.example.creditdecision.model
+
+==================================================
+7) CREATE model/ErrorDetail.java
+==================================================
+
+Create a simple Lombok @Data class with:
+- String errorId
+- String errorMessage
+
+Package:
+com.example.creditdecision.model
+
+==================================================
+8) CREATE model/ModelReasonCode.java
+==================================================
+
+Create a Lombok model with:
+- Integer applicantIndex
+- String code
+
+Use:
+- @Data
+- @NoArgsConstructor
+- @AllArgsConstructor
+
+Package:
+com.example.creditdecision.model
+
+==================================================
+9) CREATE service/InitializeImputeService.java
+==================================================
+
+Create this service in:
+com.example.creditdecision.service
+
+Use @Service.
+
+This class must implement exactly the Initialize & Impute behavior for the current sheet.
+
+Add this constant:
+- CUSTOM_MODEL_NAME = "CORDS-retail-services-orig-risk-12855"
+
+Public method:
+- public ExecutionContext initialize(DecisionRequest request)
+
+This method must:
+1. find the primary applicant using PrimaryApplicantUtil.findPrimaryApplicant(...)
+2. throw IllegalArgumentException("No primary applicant found") if not found
+3. create ExecutionContext
+4. set request
+5. set primaryApplicant
+6. initialize businessTermSet
+7. initialize decisionDetails
+8. call internal methods in this order:
+   - imputeBusinessTermSet(context)
+   - derivePrimFico(context)
+   - deriveFicoReasonCodes(context)
+   - derivePrimCustomScore(context)
+   - deriveCustomReasonCodes(context)
+9. return the context
+
+------------------------------------------
+A. BTS IMPUTATION RULES
+------------------------------------------
+
+Implement a private method:
+- private void imputeBusinessTermSet(ExecutionContext context)
+
+It must read values only from the PRIMARY applicant’s bureau object.
+
+If bureau is null:
+- set all BTS fields to -1 using a helper method
+- return
+
+Otherwise populate BTS using the following rules:
+
+For each source field:
+- if value is null -> BTS value = -1
+- else if value > upperLimit -> BTS value = -1 * value
+- else BTS value = value
+
+Implement helper:
+- private Integer imputeInteger(Integer value, int upperLimit)
+
+Use these upper limits:
+
+- all0000 -> 90
+- all0100 -> 90
+- all0136 -> 90
+- all0300 -> 90
+- all2327 -> 90
+- all8220 -> 9990
+- all8222 -> 9990
+- all8321 -> 9990
+- all9220 -> 9990
+- brc7140 -> 990
+- iqt9425 -> 90
+- iqt9426 -> 90
+- pil0438 -> 90
+- pil8120 -> 9990
+- reh5030 -> 999999990
+- reh7120 -> 990
+- rev7140 -> 990
+- use0300 -> 90
+- wfccbkcy -> Integer.MAX_VALUE
+- wfccchof -> Integer.MAX_VALUE
+- wfccfore -> Integer.MAX_VALUE
+- wfccrepo -> Integer.MAX_VALUE
+- wfccstld -> Integer.MAX_VALUE
+
+Use a helper method to read integer fields from BureauDto.
+
+You may use reflection to safely read fields if needed.
+Implement:
+- private Integer getIntegerField(BureauDto bureau, String fieldName)
+- private Integer getIntegerFieldByReflection(Object source, String fieldName)
+
+Also implement:
+- private void setAllBtsDefaults(BusinessTermSet bts)
+
+It must set every BTS field to -1.
+
+------------------------------------------
+B. primFico
+------------------------------------------
+
+Implement:
+- private void derivePrimFico(ExecutionContext context)
+
+Rules:
+- default primFico = -1
+- read primary applicant bureau fico9Score
+- if null -> keep -1
+- if score between 300 and 850 inclusive -> set primFico = fico9Score
+- otherwise set primFico = -1
+
+Store in:
+context.getDecisionDetails().setPrimFico(...)
+
+------------------------------------------
+C. ficoReasonCodes
+------------------------------------------
+
+Implement:
+- private void deriveFicoReasonCodes(ExecutionContext context)
+
+Rules:
+- from primary applicant bureau:
+  - fico9AARC1
+  - fico9AARC2
+  - fico9AARC3
+  - fico9AARC4
+  - fico9AARC5
+- add only codes that are:
+  - not null
+  - not blank
+  - not equal to "unavailable" ignoring case
+
+Store as:
+List<ModelReasonCode>
+
+Each reason code should carry:
+- applicantIndex = index of the primary applicant in request.application.applicant
+- code = trimmed reason code
+
+Implement helper:
+- private void addReasonCodeIfValid(List<ModelReasonCode> target, int applicantIndex, String code)
+
+Also implement:
+- private int getPrimaryApplicantIndex(DecisionRequest request)
+
+This must return the index of the first applicant with primaryInd == 1, or -1 if not found.
+
+------------------------------------------
+D. primCustomScore
+------------------------------------------
+
+Implement:
+- private void derivePrimCustomScore(ExecutionContext context)
+
+Rules:
+- default primCustomScore = -1.0
+- inspect primary applicant’s models list
+- only consider models where:
+  - model.name equals CUSTOM_MODEL_NAME
+  - model.errorIndicator is not true
+  - model.score is not null/blank
+- parse model.score as double
+- if score >= 0, set primCustomScore to that value and stop
+- if parsing fails, ignore that model
+- if none match, keep -1.0
+
+Store in:
+context.getDecisionDetails().setPrimCustomScore(...)
+
+------------------------------------------
+E. customReasonCodes
+------------------------------------------
+
+Implement:
+- private void deriveCustomReasonCodes(ExecutionContext context)
+
+Rules:
+- from primary applicant models
+- only consider model with:
+  - name == CUSTOM_MODEL_NAME
+  - errorIndicator != true
+- collect:
+  - aarc1
+  - aarc2
+  - aarc3
+  - aarc4
+- same filtering rules as FICO reason codes:
+  - not null
+  - not blank
+  - not "unavailable"
+
+Store as List<ModelReasonCode> in:
+context.getDecisionDetails().setCustomReasonCodes(...)
+
+==================================================
+10) UPDATE InputNormalizationService.java
+==================================================
+
+Keep the existing normalize(...) method unless changes are needed for compilation.
+
+Add a new method:
+
+- public Map<String, Object> buildInitializationSummary(ExecutionContext context)
+
+This method must return a LinkedHashMap containing:
+
+- "message" -> "Input accepted and initialized"
+- "primaryApplicantFound" -> whether context.getPrimaryApplicant() != null
+- "primFico" -> context.getDecisionDetails().getPrimFico()
+- "primCustomScore" -> context.getDecisionDetails().getPrimCustomScore()
+- "ficoReasonCodeCount" -> context.getDecisionDetails().getFicoReasonCodes().size()
+- "customReasonCodeCount" -> context.getDecisionDetails().getCustomReasonCodes().size()
+- "businessTermSetInitialized" -> context.getBusinessTermSet() != null
+- "applicationPoliciesInitialized" -> context.getApplicationPolicies() != null
+- "errorDetailsInitialized" -> context.getErrorDetails() != null
+
+Keep imports clean.
+
+==================================================
+11) UPDATE DecisionController.java
+==================================================
+
+Update the controller so `/decision/evaluate` now does Initialize & Impute.
+
+Requirements:
+- inject InitializeImputeService
+- keep InputNormalizationService
+- in evaluate(...):
+  1. call initializeImputeService.initialize(request)
+  2. return ResponseEntity.ok(inputNormalizationService.buildInitializationSummary(context))
+
+Do not remove @Valid request handling.
+
+==================================================
+12) WHAT NOT TO IMPLEMENT
+==================================================
+
+Do NOT implement any of the following now:
+- ACAPS reason conversion tables
+- tblAAConversionFico
+- tblAAConversionCustom
+- rulesVersion
+- creditDecisionDate
+- knockout logic
+- error scenario logic
+- risk tier logic
+- policy triggering
+- trace events
+- plan decision logic
+- final decision logic
+
+This stage is only about Initialize & Impute.
+
+==================================================
+13) CODING REQUIREMENTS
+==================================================
+
+- Use Java 17
+- Use Spring Boot style
+- Use Lombok
+- Keep code compilable
+- Use clean imports
+- No TODO comments
+- No placeholder methods
+- Do not generate dead code
+- If reflection is used, keep it contained and safe
+- Do not over-engineer
+
+==================================================
+14) EXPECTED BEHAVIOR AFTER IMPLEMENTATION
+==================================================
+
+After coding, POST /decision/evaluate should still work and now return a summary like:
+
+{
+  "message": "Input accepted and initialized",
+  "primaryApplicantFound": true,
+  "primFico": 720,
+  "primCustomScore": 154.0,
+  "ficoReasonCodeCount": 3,
+  "customReasonCodeCount": 2,
+  "businessTermSetInitialized": true,
+  "applicationPoliciesInitialized": true,
+  "errorDetailsInitialized": true
+}
+
+Values will depend on request payload.
+
+==================================================
+15) AFTER CODING
+==================================================
+
+After making the changes:
+1. ensure project compiles
+2. list the files created/updated
+3. briefly mention any assumptions made
+4. do not continue to next stage automatically
+
+Now implement exactly this.
