@@ -1,43 +1,7 @@
 Continue the same implementation of the Tachyon-based Knockout Authoring pipeline.
 
 ==================================================
-6) COMPLETE KnockoutPromptBuilder.java
-==================================================
-
-Implement method:
-- public String buildUserPrompt(String knockoutSheetText)
-
-This user prompt must include all of the following:
-
-1. sheet name = Knockout Calcs & Policy
-2. sheet purpose
-3. execution semantics:
-   - execute knockout calcs first
-   - then knockout policy rows
-   - if any knockout policy triggers, create policy under application.decisionDetails.policies
-   - for MVP evaluate only primary applicant where primaryInd = 1
-4. interpretation rules:
-   - preserve condition grouping exactly
-   - preserve raw vs BTS fields
-   - represent primary applicant wording as PRIMARY_ONLY scope
-   - Create Policy = action type CREATE_POLICY
-   - use policyCode and policyCategory exactly
-   - use BOM location exactly
-   - preserve null checks explicitly
-   - if calcs section empty, return empty calcDefinitions
-5. field path conventions:
-   - application.applicant[].bureau.<field>
-   - bts.<field>
-   - application.decisionDetails.policies
-6. required output schema example
-7. few-shot example 1 for Q18
-8. few-shot example 2 for D22 preserving grouped logic
-9. append the passed knockoutSheetText at the end
-
-The prompt must be detailed and optimized for extraction quality.
-
-==================================================
-7) CREATE KnockoutNormalizationValidator.java
+9) CREATE KnockoutAuthoringService.java
 ==================================================
 
 Package:
@@ -45,117 +9,111 @@ com.example.creditdecision.authoring.knockout.service
 
 Requirements:
 - Use @Service
+- Use @RequiredArgsConstructor
 
-Implement validation for the normalized artifact.
+Dependencies:
+- KnockoutPromptBuilder
+- TachyonClient
+- ObjectMapper
+- KnockoutNormalizationValidator
+- KnockoutDroolsRenderer
 
-Allowed fields set:
-- application.applicant[].bureau.frozenFileInd
-- application.applicant[].bureau.lockedFileOrWithheldIndicator
-- application.applicant[].bureau.bureauErrorIndicator
-- application.applicant[].bureau.noTradeInd
-- application.applicant[].bureau.noHitInd
-- application.applicant[].bureau.minorIndicator
-- bts.all0300
-
-Allowed operators set:
-- EQ
-- IN
-- NE
-- GT
-- GTE
-- LT
-- LTE
-
-Implement method:
-- public ValidationResult validate(KnockoutSheetArtifact artifact)
-
-Validation behavior:
-- if artifact null -> invalid
-- if policyDefinitions empty -> warning
-- validate each rule:
-  - ruleId present
-  - ruleName present
-  - policyCode present
-  - policyCategory present
-  - locationInBom present
-  - if locationInBom is not application.decisionDetails.policies -> warning
-  - duplicate policy codes -> warning
-  - missing explicit scope -> warning
-  - missing action -> error
-  - if action type != CREATE_POLICY -> warning
-  - validate conditionTree recursively
-
-Implement recursive helper:
-- validateConditionNode(...)
-
-Rules:
-- node must be either a group node (logic + children) or leaf node (field/operator/value)
-- unknown field -> warning
-- unsupported operator -> error
-
-If errors exist, set valid = false.
-Otherwise valid = true.
-
-==================================================
-8) CREATE KnockoutDroolsRenderer.java
-==================================================
-
-Package:
-com.example.creditdecision.authoring.knockout.service
-
-Requirements:
-- Use @Service
-
-Implement method:
-- public String render(KnockoutSheetArtifact artifact)
+Implement public method:
+- public KnockoutAuthoringResult author(String knockoutSheetText)
 
 Behavior:
-- generate DRL text
-- add package line: com.example.creditdecision.rules.knockout
-- import ExecutionContext
-- import PolicyCreationService (even if not implemented yet; this is authoring output)
-
-For each rule, render one DRL rule.
-
-Implement helper:
-- private String renderRule(KnockoutRuleArtifact rule)
-
-Template:
-rule "<RULE_ID>_<POLICY_CODE>"
-when
-    $ctx : ExecutionContext()
-    eval(<generated_boolean_expression>)
-then
-    PolicyCreationService.addPolicy($ctx, "<ruleId>", "<policyCode>", "<policyCategory>", "<ruleName>");
-end
-
-Implement recursive helper:
-- private String toDroolsExpression(ConditionNode node)
-
-Support:
-- grouped nodes with AND / OR
-- leaf operators:
-  - EQ
-  - NE
-  - IN
+1. build Tachyon request with promptBuilder.buildRequest(knockoutSheetText)
+2. also build rawPrompt = promptBuilder.buildUserPrompt(knockoutSheetText)
+3. call tachyonClient.chat(...)
+4. get rawContent via tachyonClient.extractFirstContent(...)
+5. clean markdown code fences if Tachyon returned ```json ... ```
+6. parse into KnockoutSheetArtifact using ObjectMapper
+7. validate artifact
+8. if valid, render DRL, otherwise renderedDrl = ""
+9. create AuthoringTrace:
+   - sheetName = "Knockout Calcs & Policy"
+   - rawPrompt
+   - rawResponse
+   - validationResult
+   - if valid, generatedFiles contains:
+     - knockout-policy.json
+     - knockout-policy.drl
+10. return result object
 
 Implement helper:
-- private String renderInExpression(String accessor, Object value)
+- private String cleanupJson(String raw)
 
-Implement helper:
-- private String toAccessor(String field)
+Create nested static DTO:
+- KnockoutAuthoringResult
+fields:
+- KnockoutSheetArtifact artifact
+- ValidationResult validationResult
+- String renderedDrl
+- AuthoringTrace trace
 
-Map these fields:
-- application.applicant[].bureau.frozenFileInd -> $ctx.getPrimaryApplicant().getBureau().getFrozenFileInd()
-- application.applicant[].bureau.lockedFileOrWithheldIndicator -> $ctx.getPrimaryApplicant().getBureau().getLockedFileOrWithheldIndicator()
-- application.applicant[].bureau.bureauErrorIndicator -> $ctx.getPrimaryApplicant().getBureau().getBureauErrorIndicator()
-- application.applicant[].bureau.noTradeInd -> $ctx.getPrimaryApplicant().getBureau().getNoTradeInd()
-- application.applicant[].bureau.noHitInd -> $ctx.getPrimaryApplicant().getBureau().getNoHitInd()
-- application.applicant[].bureau.minorIndicator -> $ctx.getPrimaryApplicant().getBureau().getMinorIndicator()
-- bts.all0300 -> $ctx.getBusinessTermSet().getAll0300()
+Use Lombok @Data on nested result class.
 
-Throw IllegalArgumentException for unsupported fields/operators.
+If parsing/validation fails unexpectedly, throw IllegalStateException("Failed to parse or validate knockout Tachyon response", e)
+Continue the same implementation of the Tachyon-based Knockout Authoring pipeline.
 
-Implement helper:
-- private String renderValue(Object value)
-- private String escape(String input)
+==================================================
+10) CREATE KnockoutAuthoringController.java
+==================================================
+
+Package:
+com.example.creditdecision.api
+
+Requirements:
+- Use @RestController
+- Use @RequestMapping("/authoring/knockout")
+- Use @RequiredArgsConstructor
+
+Dependency:
+- KnockoutAuthoringService
+
+Add POST endpoint:
+- @PostMapping
+- accept request body class KnockoutAuthoringRequest
+- return KnockoutAuthoringService.KnockoutAuthoringResult
+
+Create nested static request DTO:
+- field: String sheetText
+- use Lombok @Data
+
+Endpoint behavior:
+- return ResponseEntity.ok(knockoutAuthoringService.author(request.getSheetText()))
+
+==================================================
+11) POM / COMPILATION NOTES
+==================================================
+
+If needed for compilation:
+- ensure spring-boot-starter-web exists
+- ensure lombok exists
+- ensure jackson-databind is available
+- ensure configuration properties scanning works
+
+Do not add unnecessary dependencies.
+Continue the same implementation of the Tachyon-based Knockout Authoring pipeline.
+
+==================================================
+12) SAMPLE REQUEST BODY
+==================================================
+
+After implementing, share a sample POST body for /authoring/knockout like:
+
+{
+  "sheetText": "Sheet: Knockout Calcs & Policy\nInstructions: Execute KNOCKOUT_CALCS, then execute KNOCKOUT_POLICY. If any application.POLICY exists after execution of the knockout rules, the application should be declined. For MVP only one applicant is supported and rules are filtered on the primary applicant.\n\nKnockout Policy Rows:\nKNOCK_1 | Credit Bureau Frozen or Locked (Q18) | Inputs: frozenIndicator, lockedIndicator | For each applicant[i] where applicant[i].primaryInd = 1 then if applicant[i].bureauData.frozenFileInd is not null and applicant[i].bureauData.frozenFileInd = true OR applicant[i].bureauData.lockedFileOrWithheldIndicator is not null and applicant[i].bureauData.lockedFileOrWithheldIndicator = true then Create a Policy for applicant using POLICY_APLCNT_INDEX = [i] | PolicyCode=Q18 | PolicyCategory=KNOCKOUT | LocationInBOM=application.decisionDetails.policies\n\nKNOCK_2 | No Trade No Hit (D22) | Inputs: bureauErrorIndicator, frozenFileInd, BTS.ALL0300, noTradeInd, noHitInd, minorIndicator | For each applicant[i] where applicant[i].primaryInd = 1 then if frozenFileInd = false and lockedFileOrWithheldIndicator = false and ((ALL0300 is not null and (ALL0300 = 0 or ALL0300 = 99)) or noTradeInd = true or noHitInd = true or minorIndicator = true) then Create a Policy for applicant using POLICY_APLCNT_INDEX = [i] | PolicyCode=D22 | PolicyCategory=KNOCKOUT | LocationInBOM=application.decisionDetails.policies"
+}
+
+==================================================
+13) AFTER IMPLEMENTATION
+==================================================
+
+After coding:
+1. ensure project compiles
+2. list files created/updated
+3. mention assumptions
+4. stop there
+
+Now implement exactly this stage.
