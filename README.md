@@ -1,391 +1,384 @@
-Now implement the "Application Policy Rules" sheet on top of the Policy Tables stage that already exists.
+Implement the next stage of the credit decision pipeline: PRE-OFFER CALCS.
 
-GOAL
-Implement Application Policy Rules as a Tachyon-authored, canonical-artifact, DRL-rendered, Drools-executed stage.
+Assume the project already has:
+- a working Spring Boot app
+- request/domain models for application, applicant, bureau, merchant, loan, decisionDetails
+- integrated stage orchestration through /decision/evaluate
+- previous stages already wired: input normalization, global calcs, knockout, error scenarios, initialize & impute, risk tier, policy tables, application policy rules
+- primary-applicant-only MVP
+- application.decisionDetails is the destination for derived outputs unless explicitly stated otherwise
 
-This stage SHOULD create actual Policy objects and append them to application.decisionDetails.policies.
+IMPORTANT IMPLEMENTATION DECISION:
+Pre-Offer Calcs must be implemented as JAVA-FIRST, NOT Tachyon.
+Reason:
+- this sheet is deterministic calculation logic, not natural-language business-policy authoring
+- it contains formulas, defaults, accumulation, rounding, caps/floors, and table lookup
+- we want stable runtime behavior and easy debugging
+- it should still be EXTENSIBLE and SHEET-DRIVEN where practical
 
-DESIGN DECISION
-- Policy Tables = Java evaluator
-- Application Policy Rules = Tachyon pipeline + DRL runtime
-Do not change that design.
+GOAL:
+Build a sheet-driven Pre-Offer Calcs stage that:
+1. extracts/normalizes pre-offer rows and the tblMaxDSR table from the Excel workbook
+2. evaluates the pre-offer calculations in execution order
+3. writes outputs into application.decisionDetails
+4. is integrated into the main pipeline after application policy rules and before loan assignment / later offer stages
+5. supports refresh on app startup the same way other extracted stages do
+6. is designed so adding more rows of the same pattern later requires minimal or no code changes
 
-CURRENT CONTEXT
-The project now already has:
-- integrated evaluation pipeline
-- ExecutionContext
-- current working stages before this:
-  1. input
-  2. global calcs
-  3. knockout
-  4. error scenarios
-  5. initialize & impute
-  6. risk tier
-  7. policy tables
-- drools support already exists or is already used by knockout
-- Tachyon caller support already exists or can be reused
-- We want one more stage after Policy Tables called ApplicationPolicyRulesStage
+==================================================
+BUSINESS CONTEXT / WHAT THIS SHEET DOES
+==================================================
 
-WHAT THIS SHEET DOES
-This sheet contains actual application-level policy rules for the PRIMARY applicant only.
-It references:
-- raw applicant/application fields
-- risk tier outputs
-- policy table outputs
-- helper calculations
-- grouped rulesets
+This sheet computes application-level pre-offer financial fields before plan/offer level stages.
 
-Examples from the sheet:
-GLOBAL:
-- T73
-- T75
-- T76
-- T77
-- T78
-- T50
-- T51
+Current visible rules from the sheet include at least:
 
-INDUSTRY-HI/PS gated rules:
-- execute only when industryCode in ('12','13')
-- then evaluate T56, T57, T64 etc
+PreOffer 1a: tmpAdtnIncome
+- initialize tmpAdtnIncome = 0
+- if primary applicant exists
+- and primaryApplicant.income.additionalIncomes is not null
+- and > 0
+- then tmpAdtnIncome = primaryApplicant.income.additionalIncomes
+- output location: application.decisionDetails
+- note: if additionalIncomes missing/null, proxy/default remains 0
 
-SCD:
-- execute policy tables tblDecisionStrategyProgram, tblDecisionStrategyDeviation, tblSCDPolicy
-- if scdInd = 1 then create policy SCD
+PreOffer 1b: adjustedIncome
+- initialize adjustedIncome = 0
+- if primary applicant exists
+- and primaryApplicant.income.totalAnnualIncome is not null
+- and not unavailable
+- then adjustedIncome =
+  primaryApplicant.income.totalAnnualIncome
+  - tmpAdtnIncome
+  + (tmpAdtnIncome * 1.25)
+- round adjustedIncome to nearest hundredths (2 decimals)
+- output location: application.decisionDetails
 
-RECESSION:
-- execute tables tblT94Program + tblT94Policy
-- execute tables tblT95Program + tblT95Policy
-- execute tables tblT96Program + tblT96Policy
-- execute tables tblT97Program + tblT97Policy
-- execute tables tblT98Program + tblT98AltMinFico
-- then create policies T94/T95/T96/T97/T98 depending on indicators
+PreOffer 2: monthlyIncome
+- initialize monthlyIncome = -1
+- monthlyIncome = adjustedIncome / 12
+- round monthlyIncome to nearest hundredths (2 decimals)
+- output location: application.decisionDetails
 
-BUREAU FRAUD:
-- helper calculation: ratio_use0300all0300
-- then policies FP1, FP2, FP3, FP4
+PreOffer 3: housingProxy
+- initialize housingProxy = 0
+- initialize tempProxyApplies = 0
+- for primary applicant only:
+  if residenceStatus == "RENT"
+  OR (residenceStatus == "OTHER" AND actMtgTradeInd == false)
+  then:
+    tempProxyApplies = 1
+    housingProxy = housingProxy + (0.15 * monthlyIncome)
+- round housingProxy to nearest hundredths
 
-IMPORTANT RULES
-1. PRIMARY applicant only for MVP.
-2. This stage runs AFTER Policy Tables.
-3. It consumes derived values already produced earlier:
-   - riskTier
-   - custXficoRsnCd
-   - t50MinFico
-   - t51Ind
-   - t94Program
-   - t94Ind
-   - t95Program
-   - t95Ind
-   - t96Program
-   - t96Ind
-   - t97Program
-   - t97Ind
-   - t98Program
-   - t98MinFico
-   - decisionStrategy
-   - scdInd
-4. This stage creates actual Policy objects.
-5. Keep rule-authoring sheet-driven and extensible.
+PreOffer 4: housingProxy floor/cap
+- if tempProxyApplies == 1 and housingProxy < 250 then housingProxy = 250
+- if tempProxyApplies == 1 and housingProxy > 4000 then housingProxy = 4000
 
-IMPLEMENTATION TO BUILD
+PreOffer 5: finalBureauTotMonthlyPmt
+- initialize application.finalBureauTotMonthlyPmt = 0 or application.decisionDetails.finalBureauTotMonthlyPmt depending on current model convention; prefer decisionDetails unless existing domain already has this at application level
+- sum applicant[i].bureau.bureauTotMonthlyPmt for applicants where value is not null and not unavailable
+- then if housingProxy is not null, add housingProxy
+- round to nearest hundredths if needed
+- output should be placed consistently in the project’s chosen BOM/domain location
 
-1. Excel extractor
-Create:
-com.wellsfargo.creditdecision.apppolicy.excel.ApplicationPolicyRulesExcelExtractor
+PreOffer 6: residualIncomeGross
+- initialize residualIncomeGross = 0
+- if monthlyIncome and finalBureauTotMonthlyPmt are not null
+- residualIncomeGross = monthlyIncome - finalBureauTotMonthlyPmt
+- round to nearest hundredths
+- output location: application.decisionDetails
 
-Responsibilities:
-- read workbook path
-- open sheet "Application Policy Rules"
-- extract rows with:
+PreOffer 7: residualIncomeNet
+- initialize residualIncomeNet = 0
+- if monthlyIncome and finalBureauTotMonthlyPmt are not null
+- residualIncomeNet = (0.80 * monthlyIncome) - finalBureauTotMonthlyPmt
+- round to nearest hundredths
+- output location: application.decisionDetails
+
+PreOffer 8: maxDsr
+- execute table tblMaxDSR
+- set maxDsr from that table
+- output location: application.decisionDetails.maxDsr
+
+PreOffer 9: maxLoanAmtInit and loanStrategy
+- this is delegated to Loan Assignment Strategy tab
+- do not fully implement the next tab here
+- only create a hook/interface for later delegation so PreOffer stage can call a loan assignment service once that tab is implemented
+
+Use only PRIMARY applicant logic where sheet implies primary applicant for MVP.
+Do not add secondary-applicant strategy now.
+
+==================================================
+ARCHITECTURE TO BUILD
+==================================================
+
+Create the following package structure under the existing base package, adapting package names to the project:
+
+src/main/java/.../preoffer/model
+src/main/java/.../preoffer/extractor
+src/main/java/.../preoffer/service
+src/main/java/.../preoffer/controller (only if there is an authoring/debug endpoint pattern already in the project)
+src/test/java/.../preoffer
+
+Implement these classes/interfaces:
+
+1. PreOfferCalcRow.java
+- normalized representation of a calc row
+- fields:
   - ruleId
-  - ruleSet
-  - ruleName
-  - inputParameters
-  - formulaOrExpression
-  - policyCode
-  - locationInBom
+  - attributeName
+  - inputAttributes (List<String>)
+  - rawLogic
+  - bomLocation
   - notes
-- also detect execution condition markers like:
-  - if industryCode IN ('12','13') then execute the INDUSTRY-HI/PS ruleset
-  - end execution condition
-- detect helper calculation rows like:
-  - Calc_use0300_all0300_Ratio
+  - executionOrder
+  - valid
+  - rejectionReason
+- keep immutable or use Lombok if project already uses it
 
-2. Raw row model
-Create:
-com.wellsfargo.creditdecision.apppolicy.model.ApplicationPolicyRawRow
+2. MaxDsrTableDefinition.java
+- representation of tblMaxDSR
+- fields:
+  - tableName
+  - preExecutionDefault
+  - outputBomLocation
+  - list of row definitions
 
-Fields:
-- rowNumber
-- ruleId
-- ruleSet
-- ruleName
-- inputParametersRaw
-- formulaRaw
-- policyCode
-- locationInBom
-- notes
-- rowType (POLICY_RULE / HELPER_CALC / EXECUTION_CONDITION_START / EXECUTION_CONDITION_END)
+3. MaxDsrTableRow.java
+- fields:
+  - rowLabel / sourceLabel
+  - riskTierRange
+  - outputValue
+  - ruleName
 
-3. Normalization service
-Create:
-com.wellsfargo.creditdecision.apppolicy.excel.ApplicationPolicyRuleNormalizationService
+4. NumericRange.java
+- generic helper for parsing labels like:
+  - 1 <= .. <= 7
+  - 8
+  - >= 9
+  - <= 0
+  - etc
+- support inclusive min/max boundaries
+- support exact-value rows
 
-Responsibilities:
-- normalize extracted rows
-- split input parameters into list
-- attach rules to their group/ruleset
-- identify execution-gated rule groups
-- mark helper calculations separately
-- validate rows before Tachyon
-- reject blank or unusable rows cleanly
-- preserve traceability to source row number and raw formula
-
-4. Canonical artifact models
-Create:
-com.wellsfargo.creditdecision.apppolicy.model.canonical
-
-Files:
-- CanonicalApplicationPolicyArtifact.java
-- CanonicalHelperCalculation.java
-- CanonicalRuleGroup.java
-- CanonicalExecutionGate.java
-- CanonicalApplicationPolicyRule.java
-- CanonicalConditionNode.java
-- CanonicalPolicyAction.java
-
-Suggested structure:
-CanonicalApplicationPolicyArtifact:
-- sheetType
+5. PreOfferExtractionResult.java
+- workbookPath
 - sheetName
-- List<CanonicalHelperCalculation> helperCalculations
-- List<CanonicalRuleGroup> ruleGroups
-- List<String> warnings
+- instructions
+- calcRows
+- maxDsrTable
+- rejectedRows
 
-CanonicalRuleGroup:
-- groupName
-- executionGate
-- List<CanonicalApplicationPolicyRule> rules
+6. PreOfferExcelExtractor.java
+- use Apache POI
+- read the Pre-Offer Calcs sheet directly from the workbook path
+- dynamically find the calc grid and tblMaxDSR table; do not hardcode row numbers if avoidable
+- extraction should survive inserted rows as long as headers/titles remain recognizable
+- detect:
+  - rule id
+  - attribute name
+  - input attributes
+  - logic
+  - BOM location
+  - notes
+- also extract tblMaxDSR and its ranges/outputs
+- validate required columns
+- reject malformed rows rather than crashing
+- empty rows should be skipped
+- return PreOfferExtractionResult
 
-CanonicalHelperCalculation:
-- calcId
-- outputName
-- inputs
-- expression
-- scope
+7. PreOfferNormalizationService.java
+- normalize extracted rows into canonical internal form
+- trim whitespace
+- split inputAttributes into clean list
+- standardize BOM paths
+- standardize logic text formatting
+- parse/validate tblMaxDSR labels into NumericRange
+- mark invalid rows with rejectionReason
+- do not use OCR
+- this is workbook-based extraction, not screenshot parsing
 
-CanonicalApplicationPolicyRule:
-- ruleId
-- ruleName
-- policyCode
-- inputs
-- conditionTree
-- action
-- notes
-- sourceRowNumber
-- ruleGroupName
+8. MaxDsrTableEvaluator.java
+- given riskTier, return maxDsr from tblMaxDSR
+- first-hit semantics
+- if no row matches, leave default from pre-exec
+- support exact values and ranges
 
-CanonicalPolicyAction:
-- type = CREATE_POLICY
-- target = application.decisionDetails.policies
-- policyCode
-- policyCategory inferred or passed
-- ruleName
+9. PreOfferCalculationSupport.java
+- helper math methods:
+  - safeBigDecimal
+  - isUnavailable
+  - round2
+  - percentage multiplication
+  - null-safe subtraction/addition
+- centralize numeric handling with BigDecimal where appropriate
 
-5. Prompt builder
-Create:
-com.wellsfargo.creditdecision.apppolicy.tachyon.ApplicationPolicyPromptBuilder
+10. PreOfferLoanAssignmentGateway.java
+- interface only for now
+- method like:
+  LoanAssignmentResult execute(ExecutionContext context);
+- create a no-op placeholder implementation for now returning nulls/defaults so pre-offer can compile and integrate without implementing the next tab yet
 
-Build a compact prompt, not a huge one.
-The prompt must clearly instruct Tachyon:
-- Sheet type = APPLICATION_POLICY_RULES
-- Scope = PRIMARY_ONLY
-- Output = valid canonical JSON only
-- Do not wrap output in markdown
-- Do not invent fields
-- Preserve source row numbers
-- helper calculations must be emitted separately
-- execution conditions must become rule-group gates
-- table references like tblT50MinFICO / tblT51Policy / tblT94Program etc are NOT to be redefined; they are already resolved by prior Java policy-table stage, and should be referenced as derived inputs
-- output must be DRL-renderable
-- formulas should use application/applicant/derivedValues naming consistently
+11. PreOfferCalcsService.java
+- main runtime evaluator
+- takes ExecutionContext
+- reads primary applicant from context/application
+- executes rules in order:
+  a. tmpAdtnIncome
+  b. adjustedIncome
+  c. monthlyIncome
+  d. housingProxy / tempProxyApplies
+  e. floor/cap
+  f. finalBureauTotMonthlyPmt
+  g. residualIncomeGross
+  h. residualIncomeNet
+  i. maxDsr via table evaluator
+  j. delegate hook to loan assignment gateway
+- writes outputs into decisionDetails and/or agreed domain locations
+- do not compute by fragile string-eval
+- implement as typed Java methods, but driven by extracted metadata for traceability
+- retain execution trace / audit entries where project already supports traceability
 
-Also include compact context for known field mapping:
-- primFico
-- primCustomScore
-- riskTier
-- industryCode
-- use0300
-- all0300
-- all8220
-- all8321
-- all2327
-- pil8120
-- pil0438
-- iqt9416
-- iqt9425
-- iqt9426
-- reh5030
-- wfccbkcy
-- wfccstld
-- wfccfore
-- wfccrepo
-- wfccchof
-- noTradeInd etc if used
+12. PreOfferRefreshService.java
+- on startup refreshes extracted/normalized pre-offer artifacts from workbook path configured in properties
+- store normalized artifacts in memory cache or file cache, consistent with existing project style
+- if workbook missing, fail gracefully with clear logs
+- if refresh fails, app should not crash unless project already intentionally fails startup
 
-6. Tachyon translation service
-Create:
-com.wellsfargo.creditdecision.apppolicy.tachyon.ApplicationPolicyTranslationService
+13. PreOfferArtifactsProvider.java
+- gives current normalized extracted artifacts to runtime service
+- analogous to provider pattern used elsewhere if present
 
-Responsibilities:
-- accept normalized rows
-- build prompt
-- call shared Tachyon client
-- parse JSON response
-- map to CanonicalApplicationPolicyArtifact
-- keep raw prompt + raw response for traceability
-- fail safely if response malformed
+14. PreOfferStage.java
+- integrate with overall stage orchestration
+- wrapper around PreOfferCalcsService
+- updates context/stage trace/status
 
-7. Artifact validation service
-Create:
-com.wellsfargo.creditdecision.apppolicy.validation.ApplicationPolicyArtifactValidationService
+15. PreOfferDebugController.java (optional but recommended if consistent with existing project)
+- endpoint to inspect extracted and normalized pre-offer artifacts
+- something like POST /authoring/preoffer/excel
+- request body contains workbook path + sheet name
+- response contains extraction result for debugging
 
-Validate:
-- policy rules have policyCode when action is CREATE_POLICY
-- helper calculations have outputName
-- groups are not null
-- condition trees are not empty
-- execution gates are structurally valid
-- reject bad artifacts before DRL render
+==================================================
+DOMAIN / OUTPUT MAPPING
+==================================================
 
-8. DRL renderer
-Create:
-com.wellsfargo.creditdecision.apppolicy.drools.ApplicationPolicyDroolsRenderer
+Use existing domain models if already present. Add missing fields only if needed.
 
-Responsibilities:
-- render valid DRL from canonical artifact
-- helper calculations must be rendered first
-- group execution gates must be honored
-- individual rules create Policy using PolicyCreationService
-- append policies to application.decisionDetails.policies
-- use ExecutionContext as inserted fact
-- use primary applicant only
-- read policy-table derived values from context.getDerivedValue(...)
-- renderer must support nested AND/OR condition tree
-- renderer must support operators:
-  EQ, NE, LT, LTE, GT, GTE, IN, NOT_IN, NOT_NULL, BETWEEN
-- render clean readable DRL
+Ensure DecisionDetails has or can hold:
+- tmpAdtnIncome
+- adjustedIncome
+- monthlyIncome
+- housingProxy
+- tempProxyApplies
+- finalBureauTotMonthlyPmt
+- residualIncomeGross
+- residualIncomeNet
+- maxDsr
+- optionally maxLoanAmtInit
+- optionally loanStrategy
 
-9. Persistence / startup refresh
-Create:
-com.wellsfargo.creditdecision.apppolicy.bootstrap.ApplicationPolicyBootstrapService
+If some of these already exist elsewhere in the project, do not duplicate them. Reuse current domain placement.
+But keep BOM alignment as close as possible to the sheet and current project conventions.
 
-Behavior:
-- on app startup, refresh Application Policy Rules sheet from Excel
-- extract -> normalize -> Tachyon translate -> validate -> render DRL
-- cache:
-  - canonical artifact
-  - raw prompt
-  - raw response
-  - rendered DRL
-- property examples:
-  - credit.app-policy.sheet-name=Application Policy Rules
+==================================================
+RUNTIME INTEGRATION
+==================================================
 
-10. Runtime stage
-Create:
-com.wellsfargo.creditdecision.apppolicy.runtime.ApplicationPolicyRulesStage
+Integrate this into the main /decision/evaluate pipeline:
+- after Policy Tables and Application Policy Rules if that is the current stage order in the project
+- before Loan Assignment Strategy / ATP / Plan Offer Policy
+- do not break existing full integration endpoint
 
-Behavior when /decision/evaluate is called:
-- stage runs AFTER PolicyTablesStage
-- use cached DRL artifact from startup refresh
-- execute DRL against current ExecutionContext
-- policies created by DRL must be appended to application.decisionDetails.policies
-- no separate endpoint needed for main pipeline, but optional debug endpoint is okay
+When app starts:
+- refresh pre-offer artifacts from workbook
+- runtime evaluation should use the refreshed artifacts
 
-11. Policy creation service alignment
-Ensure Application Policy DRL uses a proper service for policy construction instead of manually new-ing half-baked policy objects.
+When /decision/evaluate is hit:
+- request should pass through already integrated stages
+- then PreOfferStage should run automatically
+- response/debug state should show derived pre-offer outputs
 
-If a PolicyCreationService already exists, reuse it.
-Otherwise create or extend:
-com.wellsfargo.creditdecision.policy.PolicyCreationService
+==================================================
+VALIDATION RULES
+==================================================
 
-Need method like:
-createApplicationPolicy(
-    String policyCode,
-    String ruleName,
-    String policyCategory,
-    Integer applicantIndex,
-    String sourceRuleId
-)
+Implement validation carefully:
+- if row is blank, skip
+- if rule id missing but row is clearly not a real rule, skip
+- if logic missing for a rule row, reject row
+- if BOM location missing, keep warning but allow if runtime mapping is explicit
+- if tblMaxDSR labels are malformed, reject that row and record reason
+- never crash the whole extractor because one row is bad
 
-Policy should populate fields needed downstream:
-- policyCode
-- policyCategory
-- policyDescription if available
-- policyApclntIndex
-- maybe policyRank later if known
-- source rule metadata if useful
+==================================================
+TESTS TO WRITE
+==================================================
 
-12. Integration into main pipeline
-Wire stage order like this:
-1. input
-2. global calcs
-3. knockout
-4. error scenarios
-5. initialize & impute
-6. risk tier
-7. policy tables
-8. application policy rules
-9. later stages continue
+Write unit tests for:
 
-13. Optional debug endpoints
-If easy, create:
-- /authoring/application-policy/excel
-returns extraction + canonical artifact + DRL preview
-- /runtime/application-policy/execute
-executes just this stage for debugging
+1. PreOfferExcelExtractorTest
+- extracts calc rows from workbook
+- extracts tblMaxDSR rows
+- skips blank rows
+- handles additional inserted rows
 
-But main requirement is integration into /decision/evaluate.
+2. NumericRangeTest
+- parse exact values
+- parse closed range
+- parse >= range
+- parse <= range
 
-14. Tests
-Create tests for:
-- helper calc ratio_use0300all0300
-- T50 using t50MinFico derived value
-- T51 using t51Ind
-- industry gate for HI/PS rules
-- SCD using scdInd
-- recession rules using t94/t95/t96/t97/t98 values
-- bureau fraud rules FP1/FP2/FP3/FP4
-- no-policy scenario
-- DRL render validity test if possible
+3. MaxDsrTableEvaluatorTest
+- riskTier 5 -> expected maxDsr from table
+- riskTier 8 -> expected maxDsr
+- riskTier 10 -> expected maxDsr
+- unmatched -> default
 
-15. Keep MVP scope sane
-For MVP:
-- primary applicant only
-- application-level rules only
-- do not implement offer/plan-level rules from later sheets here
-- do not over-engineer dynamic registries
-- but keep artifact format extensible
+4. PreOfferCalcsServiceTest
+Use realistic application payloads and assert:
+- tmpAdtnIncome from additional incomes
+- adjustedIncome formula with 1.25 factor
+- monthlyIncome /12 rounded
+- housingProxy for RENT
+- housingProxy for OTHER + no mortgage trade
+- housingProxy floor 250
+- housingProxy cap 4000
+- finalBureauTotMonthlyPmt sums bureau pmt + proxy
+- residualIncomeGross correct
+- residualIncomeNet correct
+- maxDsr assigned from riskTier table
 
-IMPORTANT CONSTRAINTS
-- Do not rewrite or break current knockout/error/risk tier stages
-- Do not convert Policy Tables to Tachyon
-- Do not hardcode each application policy as separate Java service
-- Use Tachyon -> canonical JSON -> DRL -> Drools runtime
-- Keep traceability:
-  - workbook path
-  - sheet name
-  - source row number
-  - raw prompt
-  - raw response
-  - rendered DRL
+5. PipelineIntegrationTest
+- /decision/evaluate runs through integrated pipeline and includes pre-offer outputs in final response/context
 
-EXPECTED OUTCOME
-After startup refresh, hitting /decision/evaluate should:
-- execute earlier stages
-- execute Policy Tables Java stage
-- execute Application Policy Rules DRL stage
-- produce final policies in application.decisionDetails.policies
+==================================================
+CODING RULES
+==================================================
 
-Now implement all required files, startup refresh, validation, DRL rendering, stage integration, and tests for Application Policy Rules.
+- Use existing project style and package conventions
+- Prefer BigDecimal for financial calculations
+- Use clear, small methods
+- No giant god class
+- No OCR
+- No Tachyon for this sheet
+- No hardcoding specific workbook row numbers unless absolutely necessary; anchor off table labels/headings
+- Adding new rows to the sheet should be picked up on refresh if they match existing patterns
+- Keep logging clean and useful
+- Keep traces/debug output available for verification
+
+==================================================
+DELIVERABLE EXPECTATION
+==================================================
+
+Generate all code files, tests, and integration wiring needed so that:
+1. Pre-Offer Calcs can be refreshed from the workbook on startup
+2. /decision/evaluate runs the pre-offer stage automatically
+3. derived outputs are written to decisionDetails
+4. extraction + normalization + runtime evaluation are testable and debuggable
+5. implementation is Java extensible and sheet driven
+
+If some exact domain field names differ from current codebase, adapt to the existing project rather than creating conflicting duplicates.
+Proceed file by file and include all required classes and tests
