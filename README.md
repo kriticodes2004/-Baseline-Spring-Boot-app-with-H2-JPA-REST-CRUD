@@ -1,47 +1,55 @@
-Do not add more broad tests yet.
+Implement the application flow using startup artifact refresh + one runtime endpoint.
 
-I want verification against the actual workbook truth for the Risk Tier Tables sheet.
+Desired behavior:
 
-Please do these 4 things only:
+1. On application startup:
+- automatically refresh/generate artifacts for implemented Tachyon-backed sheets
+- for now this includes:
+  - knockout
+  - error scenarios
+- read workbook path from configuration
+- generate/validate DRL and keep it ready for runtime use
+- fail clearly if startup authoring/validation fails
 
-1. Print the exact extracted structure for both tables:
-   - tblRiskTier
-   - tblDeclineReasonCode
-   Include:
-   - table name
-   - pre-exec action/default
-   - output field
-   - BOM location
-   - ordered column labels
-   - ordered row labels
-   - matrix size
+2. At runtime:
+Create one endpoint:
+POST /decision/evaluate
 
-2. Show exact normalization results for these bucket labels:
-   - "invalid"
-   - "missing"
-   - "-1"
-   - "<= 0"
-   - "0 <= .. <= 544"
-   - "1 <= .. <= 112"
-   - ">= 810"
-   - "0, missing"
+When this endpoint is hit with application payload:
+- build ExecutionContext
+- execute stages in this exact order:
+  1. initialize/impute
+  2. global calcs
+  3. knockout runtime using pre-generated DRL
+  4. error scenarios runtime using pre-generated DRL
+  5. risk tier runtime using Java matrix evaluator
+- return enriched response
 
-3. Add 5 workbook-truth tests, not synthetic tests.
-   Each test must:
-   - use a value pair that maps to a real visible matrix cell from the workbook
-   - state the expected row bucket
-   - state the expected column bucket
-   - state the exact expected table output
-   Do this for both:
-   - riskTier
-   - custXficoRsnCd
+Architecture requirements:
+- do not regenerate DRL on each request
+- startup refresh should happen once when app starts
+- runtime should use already loaded/generated artifacts
+- keep authoring/bootstrap separate from request execution
+- one runtime endpoint only
+- reuse existing working services where possible
+- do not build a heavy workflow engine
 
-4. Add one explicit first-hit / no-double-match assertion.
-   The evaluator must return exactly one row and one column match.
+Implement/refine these pieces as needed:
+- DecisionStartupRefreshService
+- artifact registry/cache for generated DRL
+- DecisionOrchestrationService
+- DecisionRuntimeService
+- DecisionController with POST /decision/evaluate
 
-Do not wire new runtime code yet.
-Do not refactor.
-After this, summarize:
-- exact workbook points tested
-- expected outputs
-- whether any bucket labels were ambiguous
+Also:
+- load workbook path from configuration
+- make startup refresh logs clear
+- if startup generation fails, fail loudly with clear error
+- document the runtime order
+
+After implementation, provide:
+- files created/updated
+- startup flow summary
+- runtime flow summary
+- config needed
+- sample request body for /decision/evaluate
