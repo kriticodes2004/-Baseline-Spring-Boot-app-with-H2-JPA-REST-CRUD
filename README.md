@@ -1,36 +1,47 @@
-Proceed in order, but implement only steps 1 and 2 first:
+Do not add more broad tests yet.
 
-1. Implement RiskTierExcelExtractor extraction logic
-2. Implement RiskTierTableNormalizationService normalization logic
+I want verification against the actual workbook truth for the Risk Tier Tables sheet.
 
-Constraints:
-- Read the actual workbook with Apache POI
-- Extract both tables from the Risk Tier Tables sheet:
-  - tblRiskTier
-  - tblDeclineReasonCode
-- Do not guess matrix values manually
-- Preserve:
-  - pre-exec default values
-  - output field names
-  - BOM locations
-  - row bucket labels
-  - column bucket labels
-  - matrix values
-- Normalization must explicitly support:
-  - invalid
-  - missing
-  - -1
-  - <= 0
-  - >= 810
-  - 0 <= .. <= 544
-  - 1 <= .. <= 112
-  - 0, missing
-- Keep first-hit semantics intact
-- Do not wire into main pipeline yet
-- Do not refactor other stages
+Please do these 4 things only:
 
-After implementing, provide:
-- exact extracted raw structure for both tables
-- exact normalized bucket interpretation
-- any parsing assumptions that were required
-- whether any ambiguous labels remain
+1. Print the exact extracted structure for both tables:
+   - tblRiskTier
+   - tblDeclineReasonCode
+   Include:
+   - table name
+   - pre-exec action/default
+   - output field
+   - BOM location
+   - ordered column labels
+   - ordered row labels
+   - matrix size
+
+2. Show exact normalization results for these bucket labels:
+   - "invalid"
+   - "missing"
+   - "-1"
+   - "<= 0"
+   - "0 <= .. <= 544"
+   - "1 <= .. <= 112"
+   - ">= 810"
+   - "0, missing"
+
+3. Add 5 workbook-truth tests, not synthetic tests.
+   Each test must:
+   - use a value pair that maps to a real visible matrix cell from the workbook
+   - state the expected row bucket
+   - state the expected column bucket
+   - state the exact expected table output
+   Do this for both:
+   - riskTier
+   - custXficoRsnCd
+
+4. Add one explicit first-hit / no-double-match assertion.
+   The evaluator must return exactly one row and one column match.
+
+Do not wire new runtime code yet.
+Do not refactor.
+After this, summarize:
+- exact workbook points tested
+- expected outputs
+- whether any bucket labels were ambiguous
