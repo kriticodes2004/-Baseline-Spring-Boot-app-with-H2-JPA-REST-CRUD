@@ -1,384 +1,494 @@
-Implement the next stage of the credit decision pipeline: PRE-OFFER CALCS.
+Implement the full “Loan Assignment Strategy” sheet end-to-end in the existing Spring Boot credit decision project.
 
-Assume the project already has:
-- a working Spring Boot app
-- request/domain models for application, applicant, bureau, merchant, loan, decisionDetails
-- integrated stage orchestration through /decision/evaluate
-- previous stages already wired: input normalization, global calcs, knockout, error scenarios, initialize & impute, risk tier, policy tables, application policy rules
-- primary-applicant-only MVP
-- application.decisionDetails is the destination for derived outputs unless explicitly stated otherwise
-
-IMPORTANT IMPLEMENTATION DECISION:
-Pre-Offer Calcs must be implemented as JAVA-FIRST, NOT Tachyon.
-Reason:
-- this sheet is deterministic calculation logic, not natural-language business-policy authoring
-- it contains formulas, defaults, accumulation, rounding, caps/floors, and table lookup
-- we want stable runtime behavior and easy debugging
-- it should still be EXTENSIBLE and SHEET-DRIVEN where practical
-
-GOAL:
-Build a sheet-driven Pre-Offer Calcs stage that:
-1. extracts/normalizes pre-offer rows and the tblMaxDSR table from the Excel workbook
-2. evaluates the pre-offer calculations in execution order
-3. writes outputs into application.decisionDetails
-4. is integrated into the main pipeline after application policy rules and before loan assignment / later offer stages
-5. supports refresh on app startup the same way other extracted stages do
-6. is designed so adding more rows of the same pattern later requires minimal or no code changes
+You have NO prior context. Follow these instructions exactly and build on top of the current codebase without breaking existing stages.
 
 ==================================================
-BUSINESS CONTEXT / WHAT THIS SHEET DOES
+GOAL
 ==================================================
 
-This sheet computes application-level pre-offer financial fields before plan/offer level stages.
+Implement the “Loan Assignment Strategy” stage as a Java-driven, Excel-extracted, matrix/table-based runtime stage.
 
-Current visible rules from the sheet include at least:
+This stage must:
 
-PreOffer 1a: tmpAdtnIncome
-- initialize tmpAdtnIncome = 0
-- if primary applicant exists
-- and primaryApplicant.income.additionalIncomes is not null
-- and > 0
-- then tmpAdtnIncome = primaryApplicant.income.additionalIncomes
-- output location: application.decisionDetails
-- note: if additionalIncomes missing/null, proxy/default remains 0
+1. Extract and normalize all loan assignment strategy tables from the Excel workbook.
+2. Determine the final loan strategy for the application.
+3. Use the final loan strategy to select the correct max-loan-init matrix.
+4. Evaluate the chosen matrix using:
+   - riskTier
+   - residualIncomeNet
+5. Write outputs into the application decision details.
+6. Integrate this stage into the already-working pipeline after PreOfferCalcs.
+7. Support startup refresh so sheet artifacts are loaded when app starts.
+8. Be extensible so future strategy tables or new tblMaxLoanInit_* tables can be added in Excel without Java code changes.
 
-PreOffer 1b: adjustedIncome
-- initialize adjustedIncome = 0
-- if primary applicant exists
-- and primaryApplicant.income.totalAnnualIncome is not null
-- and not unavailable
-- then adjustedIncome =
-  primaryApplicant.income.totalAnnualIncome
-  - tmpAdtnIncome
-  + (tmpAdtnIncome * 1.25)
-- round adjustedIncome to nearest hundredths (2 decimals)
-- output location: application.decisionDetails
-
-PreOffer 2: monthlyIncome
-- initialize monthlyIncome = -1
-- monthlyIncome = adjustedIncome / 12
-- round monthlyIncome to nearest hundredths (2 decimals)
-- output location: application.decisionDetails
-
-PreOffer 3: housingProxy
-- initialize housingProxy = 0
-- initialize tempProxyApplies = 0
-- for primary applicant only:
-  if residenceStatus == "RENT"
-  OR (residenceStatus == "OTHER" AND actMtgTradeInd == false)
-  then:
-    tempProxyApplies = 1
-    housingProxy = housingProxy + (0.15 * monthlyIncome)
-- round housingProxy to nearest hundredths
-
-PreOffer 4: housingProxy floor/cap
-- if tempProxyApplies == 1 and housingProxy < 250 then housingProxy = 250
-- if tempProxyApplies == 1 and housingProxy > 4000 then housingProxy = 4000
-
-PreOffer 5: finalBureauTotMonthlyPmt
-- initialize application.finalBureauTotMonthlyPmt = 0 or application.decisionDetails.finalBureauTotMonthlyPmt depending on current model convention; prefer decisionDetails unless existing domain already has this at application level
-- sum applicant[i].bureau.bureauTotMonthlyPmt for applicants where value is not null and not unavailable
-- then if housingProxy is not null, add housingProxy
-- round to nearest hundredths if needed
-- output should be placed consistently in the project’s chosen BOM/domain location
-
-PreOffer 6: residualIncomeGross
-- initialize residualIncomeGross = 0
-- if monthlyIncome and finalBureauTotMonthlyPmt are not null
-- residualIncomeGross = monthlyIncome - finalBureauTotMonthlyPmt
-- round to nearest hundredths
-- output location: application.decisionDetails
-
-PreOffer 7: residualIncomeNet
-- initialize residualIncomeNet = 0
-- if monthlyIncome and finalBureauTotMonthlyPmt are not null
-- residualIncomeNet = (0.80 * monthlyIncome) - finalBureauTotMonthlyPmt
-- round to nearest hundredths
-- output location: application.decisionDetails
-
-PreOffer 8: maxDsr
-- execute table tblMaxDSR
-- set maxDsr from that table
-- output location: application.decisionDetails.maxDsr
-
-PreOffer 9: maxLoanAmtInit and loanStrategy
-- this is delegated to Loan Assignment Strategy tab
-- do not fully implement the next tab here
-- only create a hook/interface for later delegation so PreOffer stage can call a loan assignment service once that tab is implemented
-
-Use only PRIMARY applicant logic where sheet implies primary applicant for MVP.
-Do not add secondary-applicant strategy now.
+DO NOT use Tachyon here.
+DO NOT use Drools here.
+This stage must be pure Java, similar in style to Risk Tier / Policy Tables matrix evaluation.
 
 ==================================================
-ARCHITECTURE TO BUILD
+SHEET UNDERSTANDING
 ==================================================
 
-Create the following package structure under the existing base package, adapting package names to the project:
+The sheet has 3 logical parts:
 
-src/main/java/.../preoffer/model
-src/main/java/.../preoffer/extractor
-src/main/java/.../preoffer/service
-src/main/java/.../preoffer/controller (only if there is an authoring/debug endpoint pattern already in the project)
-src/test/java/.../preoffer
+----------------------------------
+A. Program-level loan strategy
+----------------------------------
+Table: tblLoanStrategyProgram
 
-Implement these classes/interfaces:
+Pre-execution action:
+- set loanStrategy = H20
 
-1. PreOfferCalcRow.java
-- normalized representation of a calc row
-- fields:
-  - ruleId
-  - attributeName
-  - inputAttributes (List<String>)
-  - rawLogic
-  - bomLocation
-  - notes
-  - executionOrder
-  - valid
-  - rejectionReason
-- keep immutable or use Lombok if project already uses it
+Columns:
+- programName (input)
+- loanStrategy (output)
+- ruleName (output)
 
-2. MaxDsrTableDefinition.java
-- representation of tblMaxDSR
-- fields:
-  - tableName
-  - preExecutionDefault
-  - outputBomLocation
-  - list of row definitions
+Example:
+- Home Projects -> H00
+- Outdoor Solutions -> H00
 
-3. MaxDsrTableRow.java
-- fields:
-  - rowLabel / sourceLabel
-  - riskTierRange
-  - outputValue
+Meaning:
+- Start with default loanStrategy = H20
+- If merchant programName matches a row, override the default.
+
+----------------------------------
+B. Deviation-level loan strategy
+----------------------------------
+Table: tblLoanStrategyDeviation
+
+Columns:
+- masterId (input)
+- merchantLocationId (input)
+- loanStrategy (output)
+- ruleName (output)
+- devProgramNameLS (transient/informational)
+
+Meaning:
+- This table overrides the program-level loan strategy for specific merchant or location cases.
+- Deviation match should override program match.
+- If no deviation match, keep program/default result.
+
+Override precedence must be:
+1. deviation table match
+2. program table match
+3. default pre-exec value
+
+For MVP:
+- Support masterId and merchantLocationId matching.
+- If both are present in a row, require both to match.
+- If only one is populated, match on that one.
+- Blank fields in a row should be treated as “not part of match”.
+
+----------------------------------
+C. Max loan init matrices
+----------------------------------
+Tables:
+- tblMaxLoanInit_H00
+- tblMaxLoanInit_H02
+- tblMaxLoanInit_H20
+- potentially more later
+
+Meaning:
+- Each matrix is tied to one loanStrategy.
+- Once final loanStrategy is known, select the matching matrix.
+- Evaluate it by:
+  - row dimension = riskTier
+  - column dimension = residualIncomeNet
+- Output = maxLoanAmtInit
+
+These matrices are FIRST-HIT lookup matrices.
+Do not hardcode only H00/H02/H20 in runtime logic.
+Instead:
+- auto-discover all tables whose names start with tblMaxLoanInit_
+- extract strategy suffix from table name
+- keep them in a map: strategyCode -> matrixDefinition
+
+So future tables like tblMaxLoanInit_H50 should work automatically after Excel refresh.
+
+==================================================
+RUNTIME INPUTS / OUTPUTS
+==================================================
+
+This stage runs AFTER PreOfferCalcs, so it should read:
+
+Inputs:
+- application.merchant.programName
+- application.merchant.masterId
+- application.merchant.merchantLocationId
+- application.decisionDetails.riskTier
+- application.decisionDetails.residualIncomeNet
+
+Outputs to write:
+- application.decisionDetails.loanStrategy
+- application.decisionDetails.maxLoanAmtInit
+
+If these exact domain paths differ in the current codebase, adapt to the existing domain model cleanly.
+
+==================================================
+EXPECTED RUNTIME FLOW
+==================================================
+
+Implement runtime logic exactly like this:
+
+1. Initialize:
+   - loanStrategy = default from pre-exec of tblLoanStrategyProgram (H20)
+   - maxLoanAmtInit = 0
+
+2. Evaluate tblLoanStrategyProgram:
+   - first matching programName row wins
+   - if matched, update loanStrategy
+
+3. Evaluate tblLoanStrategyDeviation:
+   - first matching deviation row wins
+   - if matched, override loanStrategy
+
+4. Select matrix by final loanStrategy:
+   - lookup from extracted map of strategy -> matrixDefinition
+
+5. Evaluate matrix using:
+   - riskTier
+   - residualIncomeNet
+
+6. Set:
+   - decisionDetails.loanStrategy
+   - decisionDetails.maxLoanAmtInit
+
+7. If no matrix exists for chosen strategy:
+   - log warning
+   - leave maxLoanAmtInit = 0
+   - do not crash entire pipeline
+
+==================================================
+IMPLEMENTATION REQUIREMENTS
+==================================================
+
+Build this in a clean architecture matching the rest of project style.
+
+Create / update the following kinds of classes.
+
+----------------------------------
+1. MODEL CLASSES
+----------------------------------
+
+Create model classes under appropriate package, for example:
+com.wellsfargo.creditdecision.loanassignment.model
+or current package structure equivalent.
+
+Required models:
+
+- LoanStrategyProgramRow
+  Fields:
+  - sourceRowNumber
+  - programName
+  - loanStrategy
   - ruleName
 
-4. NumericRange.java
-- generic helper for parsing labels like:
-  - 1 <= .. <= 7
-  - 8
-  - >= 9
-  - <= 0
-  - etc
-- support inclusive min/max boundaries
-- support exact-value rows
+- LoanStrategyDeviationRow
+  Fields:
+  - sourceRowNumber
+  - masterId
+  - merchantLocationId
+  - loanStrategy
+  - ruleName
+  - devProgramNameLS
 
-5. PreOfferExtractionResult.java
-- workbookPath
-- sheetName
-- instructions
-- calcRows
-- maxDsrTable
-- rejectedRows
+- MaxLoanInitMatrixDefinition
+  Fields:
+  - tableName
+  - strategyCode
+  - sourceRowNumber
+  - rowBuckets (riskTier buckets)
+  - columnBuckets (residualIncomeNet buckets)
+  - matrixValues
+  - ruleNames if available
 
-6. PreOfferExcelExtractor.java
-- use Apache POI
-- read the Pre-Offer Calcs sheet directly from the workbook path
-- dynamically find the calc grid and tblMaxDSR table; do not hardcode row numbers if avoidable
-- extraction should survive inserted rows as long as headers/titles remain recognizable
-- detect:
-  - rule id
-  - attribute name
-  - input attributes
-  - logic
-  - BOM location
-  - notes
-- also extract tblMaxDSR and its ranges/outputs
-- validate required columns
-- reject malformed rows rather than crashing
-- empty rows should be skipped
-- return PreOfferExtractionResult
+- LoanAssignmentArtifacts
+  Fields:
+  - workbookPath
+  - sheetName
+  - programRows
+  - deviationRows
+  - matricesByStrategy
+  - refreshTimestamp
+  - validationErrors / warnings if you already use similar pattern elsewhere
 
-7. PreOfferNormalizationService.java
-- normalize extracted rows into canonical internal form
-- trim whitespace
-- split inputAttributes into clean list
-- standardize BOM paths
-- standardize logic text formatting
-- parse/validate tblMaxDSR labels into NumericRange
-- mark invalid rows with rejectionReason
-- do not use OCR
-- this is workbook-based extraction, not screenshot parsing
+Reuse existing numeric range / matrix bucket abstractions if already present from Risk Tier Tables.
+Do NOT duplicate range parsing logic if generic classes already exist.
 
-8. MaxDsrTableEvaluator.java
-- given riskTier, return maxDsr from tblMaxDSR
-- first-hit semantics
-- if no row matches, leave default from pre-exec
-- support exact values and ranges
+----------------------------------
+2. EXCEL EXTRACTION
+----------------------------------
 
-9. PreOfferCalculationSupport.java
-- helper math methods:
-  - safeBigDecimal
-  - isUnavailable
-  - round2
-  - percentage multiplication
-  - null-safe subtraction/addition
-- centralize numeric handling with BigDecimal where appropriate
+Create:
+- LoanAssignmentExcelExtractor
 
-10. PreOfferLoanAssignmentGateway.java
-- interface only for now
-- method like:
-  LoanAssignmentResult execute(ExecutionContext context);
-- create a no-op placeholder implementation for now returning nulls/defaults so pre-offer can compile and integrate without implementing the next tab yet
+Responsibilities:
+- Read the workbook using Apache POI
+- Locate the “Loan Assignment Strategy” sheet
+- Extract:
+  - tblLoanStrategyProgram
+  - tblLoanStrategyDeviation
+  - all tables starting with tblMaxLoanInit_
+- Detect table blocks by the “Table Name” rows and related layout
+- Read pre-exec values where applicable
+- Capture source row numbers for traceability
+- Ignore fully blank rows
+- Skip invalid rows safely but record warnings/errors
 
-11. PreOfferCalcsService.java
-- main runtime evaluator
-- takes ExecutionContext
-- reads primary applicant from context/application
-- executes rules in order:
-  a. tmpAdtnIncome
-  b. adjustedIncome
-  c. monthlyIncome
-  d. housingProxy / tempProxyApplies
-  e. floor/cap
-  f. finalBureauTotMonthlyPmt
-  g. residualIncomeGross
-  h. residualIncomeNet
-  i. maxDsr via table evaluator
-  j. delegate hook to loan assignment gateway
-- writes outputs into decisionDetails and/or agreed domain locations
-- do not compute by fragile string-eval
-- implement as typed Java methods, but driven by extracted metadata for traceability
-- retain execution trace / audit entries where project already supports traceability
+Important:
+- Make extractor resilient to row insertions/deletions in Excel
+- Do not rely on fixed row numbers
+- Identify tables by labels and headers
+- If new rows are added into a table, extractor must pick them up on next refresh
 
-12. PreOfferRefreshService.java
-- on startup refreshes extracted/normalized pre-offer artifacts from workbook path configured in properties
-- store normalized artifacts in memory cache or file cache, consistent with existing project style
-- if workbook missing, fail gracefully with clear logs
-- if refresh fails, app should not crash unless project already intentionally fails startup
+----------------------------------
+3. NORMALIZATION / VALIDATION
+----------------------------------
 
-13. PreOfferArtifactsProvider.java
-- gives current normalized extracted artifacts to runtime service
-- analogous to provider pattern used elsewhere if present
+Create:
+- LoanAssignmentNormalizationService
 
-14. PreOfferStage.java
-- integrate with overall stage orchestration
-- wrapper around PreOfferCalcsService
-- updates context/stage trace/status
+Responsibilities:
+- Normalize raw extracted values
+- Trim strings
+- Convert blank-like cells to null
+- Normalize strategy names like H00/H02/H20
+- Validate required fields
 
-15. PreOfferDebugController.java (optional but recommended if consistent with existing project)
-- endpoint to inspect extracted and normalized pre-offer artifacts
-- something like POST /authoring/preoffer/excel
-- request body contains workbook path + sheet name
-- response contains extraction result for debugging
+Validation rules:
+
+Program table row valid if:
+- programName present
+- loanStrategy present
+
+Deviation row valid if:
+- loanStrategy present
+- and at least one of masterId or merchantLocationId is present
+
+Matrix valid if:
+- tableName starts with tblMaxLoanInit_
+- strategy suffix is present
+- row buckets parsed
+- column buckets parsed
+- matrix numeric outputs parsed correctly
+
+If invalid:
+- skip that row/table from runtime usage
+- preserve warning in artifacts/logging
+- do not crash application startup unless absolutely nothing can be loaded and fail-fast is already project convention
+
+----------------------------------
+4. RANGE / BUCKET PARSING
+----------------------------------
+
+Reuse the existing Risk Tier range parsing utility if possible.
+
+Need support for:
+- exact numeric bucket rows for riskTier
+- numeric range bucket columns for residualIncomeNet, such as:
+  - <=2500
+  - 2500 < .. <= 4000
+  - 4000 < .. <= 5500
+  - 5500 < .. <= 10000
+  - >10000
+
+If an existing parser already handles this style, reuse it.
+Otherwise implement a focused reusable parser.
+
+The evaluator must correctly match:
+- exact riskTier integer bucket
+- residualIncomeNet numeric range bucket
+
+Matrix behavior must be FIRST-HIT.
+
+----------------------------------
+5. RESOLVER / EVALUATOR SERVICES
+----------------------------------
+
+Create:
+
+- LoanStrategyResolver
+  Methods:
+  - resolveDefaultStrategy(...)
+  - resolveProgramStrategy(...)
+  - resolveDeviationStrategy(...)
+  - resolveFinalStrategy(...)
+
+Behavior:
+- default H20 from pre-exec
+- program match by merchant.programName
+- deviation overrides program/default
+- first-hit row semantics
+
+- MaxLoanInitMatrixEvaluator
+  Method:
+  - evaluate(strategy, riskTier, residualIncomeNet, artifacts)
+
+Behavior:
+- find matrix by strategy
+- match row by riskTier
+- match column by residualIncomeNet
+- return maxLoanAmtInit as BigDecimal or appropriate numeric type
+- if no match, return zero or empty optional depending on current project style
+
+- LoanAssignmentStrategyService
+  Main orchestrator for this stage.
+  Method example:
+  - apply(ExecutionContext context)
+
+Responsibilities:
+- read required inputs from context/application/decisionDetails
+- resolve loanStrategy
+- evaluate maxLoanAmtInit
+- write outputs back to decisionDetails
+- log trace/debug information
+
+----------------------------------
+6. REFRESH / PROVIDER
+----------------------------------
+
+Create:
+- LoanAssignmentArtifactsProvider
+- LoanAssignmentRefreshService
+
+Behavior:
+- On application startup, load this sheet from configured workbook path
+- parse and normalize artifacts
+- cache latest artifacts in memory
+- expose read access to runtime stage
+
+Use similar pattern already used in other sheet modules if present.
+
+Add config properties as needed, for example:
+- credit.excel.workbook-path
+- credit.excel.loan-assignment.sheet-name=Loan Assignment Strategy
+- credit.loan-assignment.refresh-on-startup=true
+
+Do not invent a completely different config style if one already exists.
+
+----------------------------------
+7. RUNTIME STAGE
+----------------------------------
+
+Create:
+- LoanAssignmentStage
+
+Responsibilities:
+- obtain artifacts from provider
+- call LoanAssignmentStrategyService
+- update execution context
+- integrate into the main application pipeline
+
+Order:
+This stage must run AFTER PreOfferCalcs.
+
+If you already have a central orchestrator for stages, wire it there.
+If current project uses a pipeline service, add this stage into that sequence.
+
+----------------------------------
+8. TRACEABILITY
+----------------------------------
+
+Preserve useful trace/debug info:
+- chosen default strategy
+- matched program row (if any)
+- matched deviation row (if any)
+- final strategy
+- selected matrix name
+- matched riskTier bucket
+- matched residualIncomeNet bucket
+- final maxLoanAmtInit
+
+Do this via logs or a debug object if project already has a trace model.
+Do not overengineer.
+
+----------------------------------
+9. TESTS
+----------------------------------
+
+Create tests for:
+
+- LoanStrategyResolverTest
+  Cases:
+  - no program/deviation match -> default H20
+  - program match -> H00
+  - deviation overrides program
+  - partial deviation matching behavior
+
+- MaxLoanInitMatrixEvaluatorTest
+  Cases:
+  - H00 matrix lookup works
+  - H02 matrix lookup works
+  - H20 matrix lookup works
+  - no matrix for strategy -> safe fallback
+  - range boundary correctness
+
+- LoanAssignmentExcelExtractorTest
+  Cases:
+  - program table extracted
+  - deviation table extracted
+  - tblMaxLoanInit_* tables auto-discovered
+  - inserted extra rows still extracted
+
+- LoanAssignmentStageIntegrationTest
+  Build an execution context with:
+  - merchant program
+  - masterId / merchantLocationId
+  - riskTier
+  - residualIncomeNet
+  Assert:
+  - loanStrategy correctly set
+  - maxLoanAmtInit correctly set
+
+Use realistic sample values from sheet screenshots.
+
+----------------------------------
+10. INTEGRATION INTO CURRENT PROJECT
+----------------------------------
+
+Update the existing main decision pipeline so that when the normal application endpoint is hit, this stage also runs automatically after PreOfferCalcs.
+
+Do not create a disconnected module.
+This must be part of the integrated application flow.
+
+If there is already an endpoint like:
+- POST /decision/evaluate
+keep using it.
+
+The application should, on a normal request:
+- run prior stages
+- run PreOfferCalcs
+- run LoanAssignmentStage
+- continue downstream
+
+----------------------------------
+11. CODE QUALITY RULES
+----------------------------------
+
+- Build on existing packages and naming style
+- Reuse risk-tier table parsing utilities if possible
+- No hardcoded row numbers
+- No hardcoded only-H00/H02/H20 evaluator logic
+- No Tachyon
+- No Drools
+- No duplicate generic range/matrix code if already available
+- Keep code compile-safe and minimal
+- Prefer plain Java and Spring services
+- Add comments only where genuinely useful
 
 ==================================================
-DOMAIN / OUTPUT MAPPING
+DELIVERABLES
 ==================================================
 
-Use existing domain models if already present. Add missing fields only if needed.
+After implementation, provide:
 
-Ensure DecisionDetails has or can hold:
-- tmpAdtnIncome
-- adjustedIncome
-- monthlyIncome
-- housingProxy
-- tempProxyApplies
-- finalBureauTotMonthlyPmt
-- residualIncomeGross
-- residualIncomeNet
-- maxDsr
-- optionally maxLoanAmtInit
-- optionally loanStrategy
+1. List of files created/updated
+2. Short explanation of runtime flow
+3. Any assumptions about merchant fields or decisionDetails fields
+4. Exact sample request payload additions needed to test this stage
+5. One example expected output showing:
+   - loanStrategy
+   - maxLoanAmtInit
 
-If some of these already exist elsewhere in the project, do not duplicate them. Reuse current domain placement.
-But keep BOM alignment as close as possible to the sheet and current project conventions.
-
-==================================================
-RUNTIME INTEGRATION
-==================================================
-
-Integrate this into the main /decision/evaluate pipeline:
-- after Policy Tables and Application Policy Rules if that is the current stage order in the project
-- before Loan Assignment Strategy / ATP / Plan Offer Policy
-- do not break existing full integration endpoint
-
-When app starts:
-- refresh pre-offer artifacts from workbook
-- runtime evaluation should use the refreshed artifacts
-
-When /decision/evaluate is hit:
-- request should pass through already integrated stages
-- then PreOfferStage should run automatically
-- response/debug state should show derived pre-offer outputs
-
-==================================================
-VALIDATION RULES
-==================================================
-
-Implement validation carefully:
-- if row is blank, skip
-- if rule id missing but row is clearly not a real rule, skip
-- if logic missing for a rule row, reject row
-- if BOM location missing, keep warning but allow if runtime mapping is explicit
-- if tblMaxDSR labels are malformed, reject that row and record reason
-- never crash the whole extractor because one row is bad
-
-==================================================
-TESTS TO WRITE
-==================================================
-
-Write unit tests for:
-
-1. PreOfferExcelExtractorTest
-- extracts calc rows from workbook
-- extracts tblMaxDSR rows
-- skips blank rows
-- handles additional inserted rows
-
-2. NumericRangeTest
-- parse exact values
-- parse closed range
-- parse >= range
-- parse <= range
-
-3. MaxDsrTableEvaluatorTest
-- riskTier 5 -> expected maxDsr from table
-- riskTier 8 -> expected maxDsr
-- riskTier 10 -> expected maxDsr
-- unmatched -> default
-
-4. PreOfferCalcsServiceTest
-Use realistic application payloads and assert:
-- tmpAdtnIncome from additional incomes
-- adjustedIncome formula with 1.25 factor
-- monthlyIncome /12 rounded
-- housingProxy for RENT
-- housingProxy for OTHER + no mortgage trade
-- housingProxy floor 250
-- housingProxy cap 4000
-- finalBureauTotMonthlyPmt sums bureau pmt + proxy
-- residualIncomeGross correct
-- residualIncomeNet correct
-- maxDsr assigned from riskTier table
-
-5. PipelineIntegrationTest
-- /decision/evaluate runs through integrated pipeline and includes pre-offer outputs in final response/context
-
-==================================================
-CODING RULES
-==================================================
-
-- Use existing project style and package conventions
-- Prefer BigDecimal for financial calculations
-- Use clear, small methods
-- No giant god class
-- No OCR
-- No Tachyon for this sheet
-- No hardcoding specific workbook row numbers unless absolutely necessary; anchor off table labels/headings
-- Adding new rows to the sheet should be picked up on refresh if they match existing patterns
-- Keep logging clean and useful
-- Keep traces/debug output available for verification
-
-==================================================
-DELIVERABLE EXPECTATION
-==================================================
-
-Generate all code files, tests, and integration wiring needed so that:
-1. Pre-Offer Calcs can be refreshed from the workbook on startup
-2. /decision/evaluate runs the pre-offer stage automatically
-3. derived outputs are written to decisionDetails
-4. extraction + normalization + runtime evaluation are testable and debuggable
-5. implementation is Java extensible and sheet driven
-
-If some exact domain field names differ from current codebase, adapt to the existing project rather than creating conflicting duplicates.
-Proceed file by file and include all required classes and tests
+Now implement the full feature.
