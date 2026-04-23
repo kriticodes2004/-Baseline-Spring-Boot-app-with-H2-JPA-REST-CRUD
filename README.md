@@ -1,18 +1,27 @@
-Do not summarize architecture.
+Now that knockout authoring + DRL rendering + Drools runtime is working and tests for Q18, D22, and no-knockout pass, do the next two tasks only:
 
-I want hard verification only.
+1. Integrate knockout runtime into the main /decision/evaluate pipeline.
+   - After initialize/impute and global calcs, execute the generated knockout DRL against the current ExecutionContext.
+   - If any knockout policy is created, update application.decisionDetails.policies and stop further decision flow for now.
+   - Keep the existing standalone authoring and runtime knockout endpoints unchanged.
 
-For the current knockout implementation, show me these exact things:
+2. Implement the next stage using the same pattern for the Error Scenarios sheet only.
+   - Build Excel extraction for the Error Scenarios sheet
+   - Normalize and prevalidate rows
+   - Build a compact Tachyon prompt for that sheet only
+   - Parse and validate returned artifacts
+   - Render DRL
+   - Execute via Drools runtime
+   - Add unit tests for:
+     - one error scenario triggers
+     - one no-error scenario
+     - one invalid Excel row rejected before Tachyon
 
-1. Does the project compile right now? If not, list exact compile errors with file names and line numbers.
-2. Is /authoring/knockout/excel runnable right now? If not, show the exact failing point.
-3. Is /runtime/knockout/execute runnable right now? If not, show the exact failing point.
-4. Give me one exact sample application payload that should trigger Q18.
-5. Give me one exact sample application payload that should trigger D22.
-6. Give me one exact sample application payload that should trigger no knockout.
-7. For each of the three cases above, tell me the exact expected output in decisionDetails.policies.
-8. If any part is unverified, explicitly say UNVERIFIED instead of assuming it works.
-
-Do not give me a conceptual explanation.
-Do not describe intended flow.
-Only report verified state, concrete payloads, concrete outputs, and concrete errors.
+Do not start risk tier tables yet.
+Do not refactor the whole architecture.
+Do not touch unrelated sheets.
+After implementation, provide:
+- files changed
+- runtime order in /decision/evaluate
+- sample payloads/tests added
+- any assumptions made
