@@ -1,22 +1,18 @@
-Now stop adding new architecture and make the knockout flow work end to end.
+Do not summarize architecture.
 
-Focus only on these tasks:
+I want hard verification only.
 
-1. Verify /authoring/knockout/excel returns valid artifact + valid rendered DRL.
-2. Verify /runtime/knockout/execute can compile that DRL and execute it against an application payload.
-3. Ensure ExecutionContext, DecisionDetails, Policy, Applicant, Bureau, and BusinessTermSet align exactly with the field paths used in generated DRL.
-4. Ensure PolicyCreationService is used by DRL instead of repeated inline policy object construction wherever possible.
-5. Ensure renderer supports operators EQ, NE, IN, NOT_NULL and nested AND/OR groups correctly.
-6. Add or update tests / sample payloads for these 3 cases:
-   - Q18 triggers
-   - D22 triggers
-   - no knockout triggers
-7. If runtime or compilation errors exist, fix them directly.
-8. After that, summarize:
-   - exact files changed
-   - exact bugs fixed
-   - exact sample payloads used
-   - actual output for each of the 3 scenarios
+For the current knockout implementation, show me these exact things:
 
-Do not move to other sheets yet.
-Do not add new architecture beyond what is needed to make knockout work fully.
+1. Does the project compile right now? If not, list exact compile errors with file names and line numbers.
+2. Is /authoring/knockout/excel runnable right now? If not, show the exact failing point.
+3. Is /runtime/knockout/execute runnable right now? If not, show the exact failing point.
+4. Give me one exact sample application payload that should trigger Q18.
+5. Give me one exact sample application payload that should trigger D22.
+6. Give me one exact sample application payload that should trigger no knockout.
+7. For each of the three cases above, tell me the exact expected output in decisionDetails.policies.
+8. If any part is unverified, explicitly say UNVERIFIED instead of assuming it works.
+
+Do not give me a conceptual explanation.
+Do not describe intended flow.
+Only report verified state, concrete payloads, concrete outputs, and concrete errors.
