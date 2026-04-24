@@ -1,124 +1,124 @@
 
-Implement the Credit Policy Table stage now, and insert it before the already-implemented Decision stage in the main /decision/evaluate pipeline.
+Implement the next two Excel sheets as sheet-driven Java reason-code conversion stages:
 
-Do not change the existing Determine Offer Approval or Decision logic unless required for wiring.
-Do not use Tachyon.
-Do not use Drools.
-Do not hardcode policy metadata in Java.
+1. FICO Rsn to ACAPS Rsn Conv
+2. Custom Rsn to ACAPS Rsn Conv
 
-## Why this stage must run before Decision
-
-The Decision sheet already uses:
-- ranking application-level policies by policies.policyRank
-- determining adverse action from the highest-ranking policy
-
-So the Credit Policy Table must enrich policies before Decision executes.
+Do not use Tachyon.  
+Do not use Drools.  
+Do not hardcode mappings in Java.
 
 ## Goal
 
-Read the Credit Policy Table sheet from Excel and use it to enrich already-triggered policy objects using policyCode as the lookup key.
+These sheets are simple lookup tables used to translate reason codes for final output.
 
-For each triggered policy, populate:
-- policyRank
-- policyDescription
-- policyCategory
-- policyType
-- policyRsnCode
+- FICO reason code -> ACAPS reason code
+- Custom reason code -> ACAPS reason code
 
-This applies to:
-- application-level policies in application.decisionDetails.policies
-- plan-level policies if they exist under plan decision details
+These stages should run after Decision and before final response/output shaping.
 
-## Create / update
+## Create
 
-Create:
-- CreditPolicyTableStage
-- CreditPolicyEnrichmentService
-- CreditPolicyTableExtractor
-- CreditPolicyTableProvider
-- CreditPolicyMetadata
-- CreditPolicyTableRow if needed
+For FICO:
+- FicoReasonConversionStage
+- FicoReasonConversionService
+- FicoReasonConversionExtractor
 
-Update:
-- Policy model if required, to include:
-  - Integer policyRank
-  - String policyDescription
-  - String policyCategory
-  - String policyType
-  - String policyRsnCode
+For Custom:
+- CustomReasonConversionStage
+- CustomReasonConversionService
+- CustomReasonConversionExtractor
 
-Keep model changes minimal.
+Add small row/model classes only if useful.
 
-## Extraction behavior
+## FICO sheet behavior
 
-Use Apache POI to read the Credit Policy Table sheet.
+Read sheet FICO Rsn to ACAPS Rsn Conv.
 
 Expected columns:
-- Rule ID
-- policyCode
-- policyRank
-- policyDescription
-- policyCategory
-- policyType
-- policyRsnCode
+- RULE ID
+- ficoRsnCode
+- ficoAcapsRsnCode
+- ficoRsnTxtEn
+- ficoRsnTxtSp
 
-Ignore notes for runtime logic.
+Only mapping columns are needed for MVP.
+Text columns may remain unused for now.
 
-Validation:
-- skip blank rows
-- skip rows with blank policyCode
+Build map:
+- Map<String, String> ficoToAcapsReasonMap
+
+Rules:
 - trim all strings
-- parse policyRank as integer
-- detect duplicate policyCode rows and fail fast with a clear startup/runtime refresh error
-- build a map: Map<String, CreditPolicyMetadata>
+- preserve leading zeroes like 01
+- skip blank rows
+- if output is N/A, treat as unmapped and do not include it in converted output
+- if duplicates exist with same output, dedupe safely
+- if duplicates exist with different outputs, fail fast with clear error
 
-## Runtime enrichment behavior
+## Custom sheet behavior
 
-For every triggered policy:
-- find metadata by policyCode
-- enrich the policy with all mapped fields
+Read sheet Custom Rsn to ACAPS Rsn Conv.
 
-If metadata is missing for a triggered code:
+Expected columns:
+- customRsnCode
+- customAcapsRsnCode
+- customRsnTxtEn
+- customRsnTxtSp
+
+Build map:
+- Map<String, String> customToAcapsReasonMap
+
+Rules:
+- trim all strings
+- skip blank rows
+- if duplicates exist with same output, allow and dedupe
+- if duplicates exist with different outputs, fail fast with clear error
+
+Important: custom codes like C00187 must be treated as strings, not numbers.
+
+## Runtime behavior
+
+After Decision has already run, convert reason codes present in the application output.
+
+Implement conversion for:
+- FICO reason codes list
+- Custom reason codes list
+
+If a code is missing from map:
 - do not fail request
-- leave fields null
-- log warning clearly
+- skip it or leave unmapped according to current output contract
+- log warning
 
-## Pipeline wiring
+If raw and converted lists both exist in output, preserve raw values and populate converted values separately.
 
-Insert this stage into the integrated pipeline:
-- after all policy-triggering stages
-- after Determine Offer Approval if that is how current pipeline is structured
-- definitely before Decision
+## Pipeline placement
 
-Required final order for this region should be effectively:
-
-1. policy-triggering stages
-2. Determine Offer Approval
-3. Credit Policy Table enrichment
-4. Decision
-
-Do not move Decision earlier.
+Insert these stages:
+- after DecisionStage
+- before final output mapping / response serialization
 
 ## Tests
 
 Add tests for:
-- extractor reads table correctly
-- duplicate policyCode detection
-- application-level policy enrichment
-- plan-level policy enrichment
-- missing metadata warning without crash
-- Decision receives populated policyRank values after this stage runs
+- FICO map extraction
+- custom map extraction
+- leading zero preservation for FICO codes like 01
+- duplicate custom code with same output allowed
+- duplicate code with conflicting output rejected
+- FICO code 96 -> N/A is skipped
+- runtime conversion of multiple reason codes works correctly
 
 ## Constraints
 
 - Java only
 - sheet-driven
-- no hardcoded switch/case for policy code mappings
+- no hardcoded switch/case mappings
 - no Tachyon
 - no DRL
-- build on top of current working codebase
+- keep implementation compact and consistent with current project style
 
-At the end, give a short summary with:
+At the end, provide:
 - files created/updated
 - exact place inserted in pipeline
-- any assumptions made
+- assumptions made about output fields
