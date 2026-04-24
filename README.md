@@ -1,206 +1,124 @@
 
-Implement Determine Offer Approval and Decision as pure Java orchestration stages in the existing Spring Boot decision pipeline.
+Implement the Credit Policy Table stage now, and insert it before the already-implemented Decision stage in the main /decision/evaluate pipeline.
 
-Do not use Tachyon.  
-Do not use Drools.  
-Do not build a generic authoring/extraction pipeline for these two sheets.
+Do not change the existing Determine Offer Approval or Decision logic unless required for wiring.
+Do not use Tachyon.
+Do not use Drools.
+Do not hardcode policy metadata in Java.
 
-These two pages are final workflow/orchestration logic, so implement them as deterministic Java services and stages.
+## Why this stage must run before Decision
+
+The Decision sheet already uses:
+- ranking application-level policies by policies.policyRank
+- determining adverse action from the highest-ranking policy
+
+So the Credit Policy Table must enrich policies before Decision executes.
 
 ## Goal
 
-After the earlier stages have already run (global calcs, knockout, error scenarios, initialize/impute, risk tier, policy tables, app policy rules, pre-offer, loan strategy, ATP, plan offer policy), implement the final two stages:
+Read the Credit Policy Table sheet from Excel and use it to enrich already-triggered policy objects using policyCode as the lookup key.
 
-1. Determine Offer Approval
-2. Decision
+For each triggered policy, populate:
+- policyRank
+- policyDescription
+- policyCategory
+- policyType
+- policyRsnCode
 
-Both must run inside the main /decision/evaluate integrated pipeline.
+This applies to:
+- application-level policies in application.decisionDetails.policies
+- plan-level policies if they exist under plan decision details
 
----
-
-## 1. Determine Offer Approval stage
-
-Create:
-- DetermineOfferApprovalStage
-- DetermineOfferApprovalService
-
-### Sheet logic to implement
-
-For all merchant.planDetails:
-
-#### OFFRAP1
-Sort merchant.planDetails ascending by monthlyInstallment.
-
-#### OFFRAP2
-For each plan, initialize:
-- planDecisionDetails.isApproved = true
-
-#### OFFRAP3
-For each plan:
-- if any application-level policy exists with non-null / non-blank policyCode
-  OR
-- if that plan’s plan-level policies exist with non-null / non-blank policyCode
-
-then:
-- set planDecisionDetails.isApproved = false
-
-Otherwise it remains true.
-
-### Required behavior
-- null-safe handling for missing merchant, planDetails, planDecisionDetails, policies
-- create planDecisionDetails if absent
-- preserve sorted order
-- application-level policies should reject all plans
-- plan-level policies should reject only that specific plan
-
-### Helper methods
-Implement clean helper methods like:
-- sortPlansByMonthlyInstallment(...)
-- hasTriggeredApplicationPolicy(...)
-- hasTriggeredPlanPolicy(...)
-- hasNonBlankPolicyCode(...)
-
----
-
-## 2. Decision stage
+## Create / update
 
 Create:
-- DecisionStage
-- DecisionService
+- CreditPolicyTableStage
+- CreditPolicyEnrichmentService
+- CreditPolicyTableExtractor
+- CreditPolicyTableProvider
+- CreditPolicyMetadata
+- CreditPolicyTableRow if needed
 
-This must be implemented as ordered Java orchestration matching the Decision sheet / flowchart.
+Update:
+- Policy model if required, to include:
+  - Integer policyRank
+  - String policyDescription
+  - String policyCategory
+  - String policyType
+  - String policyRsnCode
 
-### Important interpretation
-Some Excel rows contain multiple nested instructions in one paragraph.  
-Do not try to dynamically interpret them.  
-Instead, manually decompose them into explicit ordered Java steps.
+Keep model changes minimal.
 
-### Decision flow to implement
+## Extraction behavior
 
-#### Branch 1: Knockout triggered
-If knockout is triggered:
-- set application.decisionDetails.decisionStatus = "TD"
-- set all offers isApproved = false
-- rank existing application-level policies by policyRank
-- determine adverse action from the highest-ranking policy
-- stop further decision branching
+Use Apache POI to read the Credit Policy Table sheet.
 
-#### Branch 2: Errors triggered
-Else if errors are triggered:
-- set application.decisionDetails.decisionStatus = "QE"
-- set all offers isApproved = false
-- stop further decision branching
+Expected columns:
+- Rule ID
+- policyCode
+- policyRank
+- policyDescription
+- policyCategory
+- policyType
+- policyRsnCode
 
-#### Branch 3: Normal decisioning
-Else:
-- initialize decisionStatus = "TD"
-- if any offer has planDecisionDetails.isApproved = true
-  - set decisionStatus = "RA"
-- else
-  - copy the policies from the top-ranked offer to application.decisionDetails.policies
-  - then rank application-level policies by policyRank
-  - then determine adverse action from the highest-ranking policy code
+Ignore notes for runtime logic.
 
-### Top-ranked offer selection
-Use the sorted merchant.planDetails order from Determine Offer Approval / plan sort logic.
-Top-ranked offer = first plan after ascending sort by monthlyInstallment, unless current codebase already has a clearly defined helper for “best offer”.
+Validation:
+- skip blank rows
+- skip rows with blank policyCode
+- trim all strings
+- parse policyRank as integer
+- detect duplicate policyCode rows and fail fast with a clear startup/runtime refresh error
+- build a map: Map<String, CreditPolicyMetadata>
 
-### Policy ranking
-Sort application-level policies ascending by policyRank, with null-safe behavior.
-Policies without rank should go last.
+## Runtime enrichment behavior
 
-### Adverse action
-Determine adverse action from the highest-ranking policy code.
-Use existing mapping/service if present.
-If no mapping exists yet, create a small placeholder service interface so the pipeline is clean:
-- AdverseActionService
-- method like determineFromPolicies(List<Policy> policies)
+For every triggered policy:
+- find metadata by policyCode
+- enrich the policy with all mapped fields
 
-Do not overengineer, but wire it properly.
+If metadata is missing for a triggered code:
+- do not fail request
+- leave fields null
+- log warning clearly
 
----
+## Pipeline wiring
 
-## 3. Expected model usage
+Insert this stage into the integrated pipeline:
+- after all policy-triggering stages
+- after Determine Offer Approval if that is how current pipeline is structured
+- definitely before Decision
 
-Use existing domain models wherever possible:
-- Application
-- DecisionDetails
-- Merchant
-- PlanDetails
-- PlanDecisionDetails
-- Policy
+Required final order for this region should be effectively:
 
-If missing, minimally add:
-- decisionStatus on application decision details
-- isApproved on plan decision details
-- policy rank field if already modeled in sheet/domain
-- adverse action field if already expected in output
+1. policy-triggering stages
+2. Determine Offer Approval
+3. Credit Policy Table enrichment
+4. Decision
 
-Do not redesign the whole model.
+Do not move Decision earlier.
 
----
+## Tests
 
-## 4. Pipeline integration
+Add tests for:
+- extractor reads table correctly
+- duplicate policyCode detection
+- application-level policy enrichment
+- plan-level policy enrichment
+- missing metadata warning without crash
+- Decision receives populated policyRank values after this stage runs
 
-Wire both stages into the main integrated pipeline in this order:
+## Constraints
 
-1. earlier stages...
-2. Plan Offer Policy
-3. DetermineOfferApprovalStage
-4. DecisionStage
-5. final response mapping
-
-Do not create separate endpoints for these.
-They must run when /decision/evaluate is called.
-
----
-
-## 5. Tests to add
-
-Add focused unit/integration tests for both stages.
-
-### Determine Offer Approval tests
-- plans sorted ascending by monthlyInstallment
-- no policies anywhere -> all plans approved
-- application-level policy exists -> all plans rejected
-- only one plan has plan-level policy -> only that plan rejected
-- null-safe creation of missing planDecisionDetails
-
-### Decision tests
-- knockout present -> decisionStatus = TD, all offers false, policy ranking executed
-- errors present -> decisionStatus = QE, all offers false
-- no knockout/errors and at least one offer approved -> decisionStatus = RA
-- no knockout/errors and no offers approved -> copy top offer policies to application level, then rank, then adverse action
-- policy ranking sorts by policyRank
-- adverse action uses highest-ranking policy
-
----
-
-## 6. Code quality constraints
-
-- clean Java only
+- Java only
+- sheet-driven
+- no hardcoded switch/case for policy code mappings
 - no Tachyon
 - no DRL
-- no OCR-based logic
-- no giant utility class
-- keep methods small and explicit
-- prefer service + stage pattern matching the rest of the project
-- null-safe everywhere
-- build on top of the current codebase, do not rewrite working earlier stages
+- build on top of current working codebase
 
----
-
-## 7. Deliverables
-
-Implement all code required for:
-- Determine Offer Approval stage
-- Decision stage
-- pipeline wiring
-- minimal supporting services/helpers
-- tests
-
-At the end, also provide a short markdown summary listing:
+At the end, give a short summary with:
 - files created/updated
-- exact runtime order
-- what assumptions were made
-- any TODOs for post-MVP enhancements
+- exact place inserted in pipeline
+- any assumptions made
