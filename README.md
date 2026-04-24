@@ -1,42 +1,51 @@
-Implement the Final AA Mapping sheet as a sheet-driven Java stage.
+Build the next two final stages on top of the current working codebase:
+
+1. Final AA Mapping
+2. Output mapping / final response shaping
+
+Important: the following is already implemented and working:
+- DecisionStage
+- FicoReasonConversionStage
+- CustomReasonConversionStage
+
+Current pipeline near the end is:
+- Stage 13: Decision
+- Stage 14: FicoReasonConversionStage
+- Stage 15: CustomReasonConversionStage
+
+Now insert the next stages after those.
 
 Do not use Tachyon.  
 Do not use Drools.  
-Do not hardcode the mapping rows in Java.
+Do not hardcode Excel row mappings in Java.
 
-## Goal
+---
 
-This stage determines the final decisionDetails.adverseActions output based on:
+## A. Final AA Mapping stage
 
-- highest priority / winning policyRsnCode
+Implement the Excel sheet Final AA Mapping as a sheet-driven Java mapping stage.
+
+### Goal
+Populate final:
+- application.decisionDetails.adverseActions
+
+using:
+- winning / highest-priority application-level policyRsnCode
 - custxFicoRsnCd
 - converted FICO ACAPS reason codes
 - converted Custom ACAPS reason codes
 
-This stage must run after:
-1. Credit Policy Table enrichment
-2. Decision
-3. FICO reason conversion
-4. Custom reason conversion
-
-Then this stage builds the final adverse action codes list.
-
-## Create
-
+### Create
 - FinalAdverseActionMappingStage
 - FinalAdverseActionMappingService
 - FinalAdverseActionMappingExtractor
 - FinalAdverseActionMappingRow
 
-Add minimal output model if needed for:
-- AdverseAction
-or whatever the current response model already uses.
+### Extraction
+Read sheet:
+- Final AA Mapping
 
-## Excel extraction
-
-Read the Final AA Mapping sheet.
-
-Expected columns include:
+Expected columns:
 - policyRsnCode
 - custxFicoRsnCd
 - AACodeType1
@@ -44,112 +53,145 @@ Expected columns include:
 - AACodeType3
 - AACodeType4
 
-Build lookup rows keyed by:
-- policyRsnCode
-- custxFicoRsnCd
-
-Treat custxFicoRsnCd values as strings like:
-- C
-- F
-- N/A
+Build lookup by:
+- (policyRsnCode, custxFicoRsnCd)
 
 Validation:
 - skip blank rows
 - trim all strings
-- allow rows where later AA columns are blank
-- fail fast only if the same (policyRsnCode, custxFicoRsnCd) appears twice with conflicting content
+- allow partial AA output columns
+- fail fast only if same key appears twice with conflicting content
 
-## Runtime input assumptions
+### Runtime matching
+At runtime:
+1. determine winning / highest-ranked application-level policy
+2. read its policyRsnCode
+3. read custxFicoRsnCd
+4. first try exact row match (policyRsnCode, custxFicoRsnCd)
+5. if missing, fallback to (policyRsnCode, "N/A")
 
-At runtime, assume these are already available:
-- application-level policies enriched with policyRsnCode and policyRank
-- final winning / highest-ranked application policy
-- custxFicoRsnCd
-- converted FICO ACAPS reason code list
-- converted Custom ACAPS reason code list
-
-## Matching logic
-
-1. Determine the winning application-level policyRsnCode
-2. Read custxFicoRsnCd
-3. Find exact row by:
-   - (policyRsnCode, custxFicoRsnCd)
-4. If no exact row exists, try fallback:
-   - (policyRsnCode, "N/A")
-
-If still not found:
-- do not crash
+If no row found:
 - log warning
-- leave adverse actions empty or use minimal fallback according to existing response model
+- do not fail request
+- leave adverseActions empty or minimal fallback per existing model
 
-## Supported AA expression patterns
+### Supported AA output expressions
+Support only these patterns:
+- policyRsnCode
+- customRsnCodes[n].customAcapsRsnCode
+- ficoRsnCode[n].ficoAcapsRsnCode
 
-Each AA output cell can contain one of these patterns:
+Do not build a generic expression engine.
 
-1. policyRsnCode
-   - return the winning policy reason code
-
-2. customRsnCodes[n].customAcapsRsnCode
-   - return nth converted custom ACAPS reason code
-
-3. ficoRsnCode[n].ficoAcapsRsnCode
-   - return nth converted FICO ACAPS reason code
-
-You do not need a general expression engine.
-Implement a small parser/evaluator that supports only these exact patterns.
-
-## Evaluation behavior
-
-- evaluate AA columns in order: 1 to 4
-- if referenced nth reason does not exist, skip it
-- if expression is blank, skip it
-- deduplicate final adverse action codes while preserving order
-- create final adverseActions output list
-
-## Output population
+### Evaluation rules
+- evaluate AA columns in order 1 to 4
+- blank expression -> skip
+- missing indexed reason -> skip
+- deduplicate final AA codes while preserving order
 
 Populate:
 - application.decisionDetails.adverseActions
 
-If the output model expects objects, create objects with the resolved adverse action code.
-If the output model expects strings, populate strings.
-Keep it aligned with the current project response contract.
+If current model needs objects, create objects with resolved code.
+If it uses strings, keep it aligned.
+
+---
+
+## B. Output mapping / final response shaping
+
+Implement final output alignment with the Output Data sheet.
+
+### Create
+- FinalOutputMappingStage
+- FinalResponseAssembler or FinalResponseBuilder
+
+### Goal
+Ensure final response JSON structure matches workbook JSON locations, especially:
+
+#### 1. application.decisionDetails.customReasonCodes
+Each item should support:
+- customRsnCode
+- customAcapsRsnCode
+- customRsnTxtEn
+- customRsnTxtSp
+- customAplcntIndex
+
+#### 2. application.decisionDetails.ficoReasonCodes
+Each item should support:
+- ficoRsnCode
+- ficoAcapsRsnCode
+- ficoRsnTxtEn
+- ficoRsnTxtSp
+- applicant index if model supports it
+
+#### 3. application.decisionDetails.adverseActions
+Populate from Final AA Mapping stage.
+
+#### 4. application.trails
+Support:
+- entity
+- description
+
+Use trails only for lightweight processing messages. Keep simple.
+
+### Model updates
+Update models minimally only if required.
+Reuse existing DTO/domain objects where possible.
+
+Suggested minimal models if missing:
+- AdverseAction
+- Trail
+
+Do not redesign the whole response contract.
+
+---
+
+## Pipeline order
+Update final pipeline tail to:
+
+- Stage 13: Decision
+- Stage 14: FicoReasonConversionStage
+- Stage 15: CustomReasonConversionStage
+- Stage 16: FinalAdverseActionMappingStage
+- Stage 17: FinalOutputMappingStage
+- final response serialization
+
+---
 
 ## Tests
-
 Add tests for:
-- exact row match on (policyRsnCode, custxFicoRsnCd)
+
+### Final AA Mapping
+- exact (policyRsnCode, custxFicoRsnCd) row match
 - fallback to (policyRsnCode, N/A)
 - policyRsnCode expression resolution
-- custom reason lookup resolution
-- fico reason lookup resolution
-- missing indexed reason safely skipped
+- custom indexed reason resolution
+- fico indexed reason resolution
+- missing indexed reason skipped
 - duplicate final AA codes removed while preserving order
-- final adverseActions populated correctly for examples like:
-  - direct policyRsnCode
-  - C-based custom reason supplementation
-  - F-based fico reason supplementation
 
-## Pipeline placement
+### Output mapping
+- final response contains:
+  - application.decisionDetails.customReasonCodes
+  - application.decisionDetails.ficoReasonCodes
+  - application.decisionDetails.adverseActions
+  - application.trails
 
-Insert this stage after:
-- DecisionStage
-- FicoReasonConversionStage
-- CustomReasonConversionStage
+- JSON locations align with workbook expectations
 
-and before final response serialization/output mapping.
+---
 
 ## Constraints
-
 - Java only
 - sheet-driven
 - no Tachyon
 - no DRL
-- no hardcoded row mappings
-- compact implementation
-- build on top of the current working codebase
+- no hardcoded table row mappings
+- keep implementation compact
+- build on top of current working code
 
 At the end, provide:
-- files created/updated
-- exact pipeline order near final output
-- assumptions made about adverseActions output structure
+1. files created/updated
+2. final end-of-pipeline stage order
+3. assumptions made about adverseActions / trails models
+4. any remaining output JSON mismatches with the workbook
