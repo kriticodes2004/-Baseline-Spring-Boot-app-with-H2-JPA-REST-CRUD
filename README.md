@@ -1,124 +1,155 @@
-
-Implement the next two Excel sheets as sheet-driven Java reason-code conversion stages:
-
-1. FICO Rsn to ACAPS Rsn Conv
-2. Custom Rsn to ACAPS Rsn Conv
+Implement the Final AA Mapping sheet as a sheet-driven Java stage.
 
 Do not use Tachyon.  
 Do not use Drools.  
-Do not hardcode mappings in Java.
+Do not hardcode the mapping rows in Java.
 
 ## Goal
 
-These sheets are simple lookup tables used to translate reason codes for final output.
+This stage determines the final decisionDetails.adverseActions output based on:
 
-- FICO reason code -> ACAPS reason code
-- Custom reason code -> ACAPS reason code
+- highest priority / winning policyRsnCode
+- custxFicoRsnCd
+- converted FICO ACAPS reason codes
+- converted Custom ACAPS reason codes
 
-These stages should run after Decision and before final response/output shaping.
+This stage must run after:
+1. Credit Policy Table enrichment
+2. Decision
+3. FICO reason conversion
+4. Custom reason conversion
+
+Then this stage builds the final adverse action codes list.
 
 ## Create
 
-For FICO:
-- FicoReasonConversionStage
-- FicoReasonConversionService
-- FicoReasonConversionExtractor
+- FinalAdverseActionMappingStage
+- FinalAdverseActionMappingService
+- FinalAdverseActionMappingExtractor
+- FinalAdverseActionMappingRow
 
-For Custom:
-- CustomReasonConversionStage
-- CustomReasonConversionService
-- CustomReasonConversionExtractor
+Add minimal output model if needed for:
+- AdverseAction
+or whatever the current response model already uses.
 
-Add small row/model classes only if useful.
+## Excel extraction
 
-## FICO sheet behavior
+Read the Final AA Mapping sheet.
 
-Read sheet FICO Rsn to ACAPS Rsn Conv.
+Expected columns include:
+- policyRsnCode
+- custxFicoRsnCd
+- AACodeType1
+- AACodeType2
+- AACodeType3
+- AACodeType4
 
-Expected columns:
-- RULE ID
-- ficoRsnCode
-- ficoAcapsRsnCode
-- ficoRsnTxtEn
-- ficoRsnTxtSp
+Build lookup rows keyed by:
+- policyRsnCode
+- custxFicoRsnCd
 
-Only mapping columns are needed for MVP.
-Text columns may remain unused for now.
+Treat custxFicoRsnCd values as strings like:
+- C
+- F
+- N/A
 
-Build map:
-- Map<String, String> ficoToAcapsReasonMap
-
-Rules:
-- trim all strings
-- preserve leading zeroes like 01
+Validation:
 - skip blank rows
-- if output is N/A, treat as unmapped and do not include it in converted output
-- if duplicates exist with same output, dedupe safely
-- if duplicates exist with different outputs, fail fast with clear error
-
-## Custom sheet behavior
-
-Read sheet Custom Rsn to ACAPS Rsn Conv.
-
-Expected columns:
-- customRsnCode
-- customAcapsRsnCode
-- customRsnTxtEn
-- customRsnTxtSp
-
-Build map:
-- Map<String, String> customToAcapsReasonMap
-
-Rules:
 - trim all strings
-- skip blank rows
-- if duplicates exist with same output, allow and dedupe
-- if duplicates exist with different outputs, fail fast with clear error
+- allow rows where later AA columns are blank
+- fail fast only if the same (policyRsnCode, custxFicoRsnCd) appears twice with conflicting content
 
-Important: custom codes like C00187 must be treated as strings, not numbers.
+## Runtime input assumptions
 
-## Runtime behavior
+At runtime, assume these are already available:
+- application-level policies enriched with policyRsnCode and policyRank
+- final winning / highest-ranked application policy
+- custxFicoRsnCd
+- converted FICO ACAPS reason code list
+- converted Custom ACAPS reason code list
 
-After Decision has already run, convert reason codes present in the application output.
+## Matching logic
 
-Implement conversion for:
-- FICO reason codes list
-- Custom reason codes list
+1. Determine the winning application-level policyRsnCode
+2. Read custxFicoRsnCd
+3. Find exact row by:
+   - (policyRsnCode, custxFicoRsnCd)
+4. If no exact row exists, try fallback:
+   - (policyRsnCode, "N/A")
 
-If a code is missing from map:
-- do not fail request
-- skip it or leave unmapped according to current output contract
+If still not found:
+- do not crash
 - log warning
+- leave adverse actions empty or use minimal fallback according to existing response model
 
-If raw and converted lists both exist in output, preserve raw values and populate converted values separately.
+## Supported AA expression patterns
 
-## Pipeline placement
+Each AA output cell can contain one of these patterns:
 
-Insert these stages:
-- after DecisionStage
-- before final output mapping / response serialization
+1. policyRsnCode
+   - return the winning policy reason code
+
+2. customRsnCodes[n].customAcapsRsnCode
+   - return nth converted custom ACAPS reason code
+
+3. ficoRsnCode[n].ficoAcapsRsnCode
+   - return nth converted FICO ACAPS reason code
+
+You do not need a general expression engine.
+Implement a small parser/evaluator that supports only these exact patterns.
+
+## Evaluation behavior
+
+- evaluate AA columns in order: 1 to 4
+- if referenced nth reason does not exist, skip it
+- if expression is blank, skip it
+- deduplicate final adverse action codes while preserving order
+- create final adverseActions output list
+
+## Output population
+
+Populate:
+- application.decisionDetails.adverseActions
+
+If the output model expects objects, create objects with the resolved adverse action code.
+If the output model expects strings, populate strings.
+Keep it aligned with the current project response contract.
 
 ## Tests
 
 Add tests for:
-- FICO map extraction
-- custom map extraction
-- leading zero preservation for FICO codes like 01
-- duplicate custom code with same output allowed
-- duplicate code with conflicting output rejected
-- FICO code 96 -> N/A is skipped
-- runtime conversion of multiple reason codes works correctly
+- exact row match on (policyRsnCode, custxFicoRsnCd)
+- fallback to (policyRsnCode, N/A)
+- policyRsnCode expression resolution
+- custom reason lookup resolution
+- fico reason lookup resolution
+- missing indexed reason safely skipped
+- duplicate final AA codes removed while preserving order
+- final adverseActions populated correctly for examples like:
+  - direct policyRsnCode
+  - C-based custom reason supplementation
+  - F-based fico reason supplementation
+
+## Pipeline placement
+
+Insert this stage after:
+- DecisionStage
+- FicoReasonConversionStage
+- CustomReasonConversionStage
+
+and before final response serialization/output mapping.
 
 ## Constraints
 
 - Java only
 - sheet-driven
-- no hardcoded switch/case mappings
 - no Tachyon
 - no DRL
-- keep implementation compact and consistent with current project style
+- no hardcoded row mappings
+- compact implementation
+- build on top of the current working codebase
 
 At the end, provide:
 - files created/updated
-- exact place inserted in pipeline
-- assumptions made about output fields
+- exact pipeline order near final output
+- assumptions made about adverseActions output structure
